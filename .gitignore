@@ -1,0 +1,15 @@
+.gradle/
+.kotlin/
+build/
+app/android/app/build/
+app/android/app/.cxx/
+.artifacts/
+output/
+.conda-qairt310/
+v2.45.0.260326/
+scripts/__pycache__/
+*.pyc
+local.properties
+.claude/
+.factory/
+.vscode/

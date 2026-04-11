@@ -1,0 +1,319 @@
+diff --git a/ggml/src/ggml-backend-reg.cpp b/ggml/src/ggml-backend-reg.cpp
+index 058710921..7fa7cbcc5 100644
+--- a/ggml/src/ggml-backend-reg.cpp
++++ b/ggml/src/ggml-backend-reg.cpp
+@@ -141,7 +141,11 @@ struct ggml_backend_registry {
+ #endif
+ 
+ #ifdef GGML_USE_OPENCL
++    if (getenv("GGML_DISABLE_OPENCL") == nullptr) {
+         register_backend(ggml_backend_opencl_reg());
++    } else {
++        GGML_LOG_DEBUG("OpenCL backend disabled by GGML_DISABLE_OPENCL environment variable\n");
++    }
+ #endif
+ #ifdef GGML_USE_ZENDNN
+         register_backend(ggml_backend_zendnn_reg());
+diff --git a/ggml/src/ggml-opencl/ggml-opencl.cpp b/ggml/src/ggml-opencl/ggml-opencl.cpp
+index 6f3fc5886..eb315fd88 100644
+--- a/ggml/src/ggml-opencl/ggml-opencl.cpp
++++ b/ggml/src/ggml-opencl/ggml-opencl.cpp
+@@ -1785,6 +1785,9 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
+ 
+     // flash_attn
+     {
++#ifdef GGML_OPENCL_DISABLE_FLASH_ATTN_KERNELS
++        GGML_LOG_INFO("ggml_opencl: flash attention kernel preload disabled");
++#else
+         #ifdef GGML_OPENCL_EMBED_KERNELS
+                 const std::string kernel_src_f16 {
+                     #include "flash_attn_f16.cl.h"
+@@ -1848,6 +1851,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
+             }
+             GGML_LOG_CONT(".");
+         }
++#endif
+     }
+ 
+     // argsort
+@@ -4504,6 +4508,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer,
+         cl_event evt;
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         CL_CHECK(clReleaseMemObject(data_device));
+ 
+         tensor->extra = extra;
+@@ -4626,6 +4631,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer,
+         size_t global_size_q[3] = {static_cast<size_t>(width_q), static_cast<size_t>(height_q), 1};
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_size_q, local_size_q, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+ 
+         // scales
+         int height_s = M / 4;
+@@ -4645,6 +4651,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer,
+         size_t global_size_s[3] = {static_cast<size_t>(width_s), static_cast<size_t>(height_s), 1};
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_size_s, local_size_s, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         // <----------------------------------------------------------------------------------> //
+ 
+         // copy transposed buffer contents to original buffers
+@@ -4652,10 +4659,12 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer,
+         // weights
+         CL_CHECK(clEnqueueCopyBuffer(queue, qT_d, extra->q, 0, 0, q_size_bytes, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+ 
+         // scales
+         CL_CHECK(clEnqueueCopyBuffer(queue, dT_d, extra->d, 0, 0, d_size_bytes, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         // <----------------------------------------------------------------------------------> //
+ 
+         // deallocate transpose buffers
+@@ -4748,6 +4757,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer,
+         cl_event evt;
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         CL_CHECK(clReleaseMemObject(data_device));
+ 
+         tensor->extra = extra;
+@@ -4830,6 +4840,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer,
+             cl_event evt;
+             CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+             CL_CHECK(clWaitForEvents(1, &evt));
++            CL_CHECK(clReleaseEvent(evt));
+             CL_CHECK(clReleaseMemObject(data_device));
+             tensor->extra = extra;
+ 
+@@ -4848,6 +4859,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer,
+         cl_event evt;
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         CL_CHECK(clReleaseMemObject(data_device));
+ 
+         // Create image for Q
+@@ -4916,6 +4928,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer,
+         cl_event evt;
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         CL_CHECK(clReleaseMemObject(data_device));
+ 
+         tensor->extra = extra;
+@@ -4980,6 +4993,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer,
+             size_t global_size_q[3] = {static_cast<size_t>(width_q), static_cast<size_t>(height_q), 1};
+             CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_size_q, local_size_q, 0, NULL, &evt));
+             CL_CHECK(clWaitForEvents(1, &evt));
++            CL_CHECK(clReleaseEvent(evt));
+ 
+             // Transpose scales
+             size_t d_size_bytes = M * (K / 32) * 2;
+@@ -5026,13 +5040,16 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer,
+             size_t global_size_s[3] = {static_cast<size_t>(width_s), static_cast<size_t>(height_s), 1};
+             CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_size_s, local_size_s, 0, NULL, &evt));
+             CL_CHECK(clWaitForEvents(1, &evt));
++            CL_CHECK(clReleaseEvent(evt));
+ 
+             // copy transposed buffer contents to original buffers
+             CL_CHECK(clEnqueueCopyBuffer(queue, qT_d, extra->q, 0, 0, q_size_bytes, 0, NULL, &evt));
+             CL_CHECK(clWaitForEvents(1, &evt));
++            CL_CHECK(clReleaseEvent(evt));
+ 
+             CL_CHECK(clEnqueueCopyBuffer(queue, dT_d, extra->d, 0, 0, d_size_bytes, 0, NULL, &evt));
+             CL_CHECK(clWaitForEvents(1, &evt));
++            CL_CHECK(clReleaseEvent(evt));
+ 
+             CL_CHECK(clReleaseMemObject(qT_d));
+             CL_CHECK(clReleaseMemObject(dT_d));
+@@ -5131,6 +5148,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer,
+         cl_event evt;
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         CL_CHECK(clReleaseMemObject(data_device));
+ 
+         tensor->extra  = extra;
+@@ -5223,6 +5241,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer,
+         cl_event evt;
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         CL_CHECK(clReleaseMemObject(data_device));
+ 
+         extra->size_ql = size_ql;
+@@ -5391,6 +5410,7 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer,
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
+             global_work_size, local_work_size, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         CL_CHECK(clEnqueueReadBuffer(
+             queue, data_device, CL_TRUE, offset,
+             size, data, 0, NULL, NULL));
+@@ -5465,6 +5485,7 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer,
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
+             global_work_size, local_work_size, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         CL_CHECK(clEnqueueReadBuffer(
+             queue, data_device, CL_TRUE, offset,
+             size, data, 0, NULL, NULL));
+@@ -5499,6 +5520,7 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer,
+             CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
+                 global_work_size, local_work_size, 0, NULL, &evt));
+             CL_CHECK(clWaitForEvents(1, &evt));
++            CL_CHECK(clReleaseEvent(evt));
+             CL_CHECK(clEnqueueReadBuffer(
+                 queue, data_device, CL_TRUE, offset,
+                 size, data, 0, NULL, NULL));
+@@ -5518,6 +5540,7 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer,
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
+             global_work_size, local_work_size, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         CL_CHECK(clEnqueueReadBuffer(
+             queue, data_device, CL_TRUE, offset,
+             size, data, 0, NULL, NULL));
+@@ -5554,6 +5577,7 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer,
+             CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
+                 global_work_size, local_work_size, 0, NULL, &evt));
+             CL_CHECK(clWaitForEvents(1, &evt));
++            CL_CHECK(clReleaseEvent(evt));
+ 
+             CL_CHECK(clEnqueueReadBuffer(
+                 queue, data_device, CL_TRUE, offset,
+@@ -5574,6 +5598,7 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer,
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
+             global_work_size, local_work_size, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         CL_CHECK(clEnqueueReadBuffer(
+             queue, data_device, CL_TRUE, offset,
+             size, data, 0, NULL, NULL));
+@@ -5650,6 +5675,7 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer,
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
+             global_work_size, local_work_size, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         CL_CHECK(clEnqueueReadBuffer(
+             queue, data_device, CL_TRUE, offset,
+             size, data, 0, NULL, NULL));
+@@ -5708,6 +5734,7 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer,
+             cl_event evt;
+             CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+             CL_CHECK(clWaitForEvents(1, &evt));
++            CL_CHECK(clReleaseEvent(evt));
+             CL_CHECK(clEnqueueReadBuffer(queue, buf_unpacked.buffer, CL_TRUE, offset, size, data, 0, NULL, NULL));
+ 
+             return;
+@@ -5737,6 +5764,7 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer,
+         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL,
+             global_work_size, local_work_size, 0, NULL, &evt));
+         CL_CHECK(clWaitForEvents(1, &evt));
++        CL_CHECK(clReleaseEvent(evt));
+         CL_CHECK(clEnqueueReadBuffer(
+             queue, data_device, CL_TRUE, offset,
+             size, data, 0, NULL, NULL));
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index ba935340f..2a4c2a822 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -184,6 +184,33 @@ static llama_rope_scaling_type llama_rope_scaling_type_from_string(const std::st
+ static buft_list_t make_cpu_buft_list(const std::vector<ggml_backend_dev_t> & devices, bool use_extra_bufts, bool no_host) {
+     buft_list_t buft_list;
+ 
++    // Fast path: when the model is pinned to CPU-only devices, avoid scanning all
++    // registered backends (which can force expensive GPU backend initialization).
++    const bool cpu_only_devices = !devices.empty() && std::all_of(
++            devices.begin(),
++            devices.end(),
++            [](ggml_backend_dev_t dev) {
++                return ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
++            });
++    if (cpu_only_devices) {
++        ggml_backend_dev_t cpu_dev = devices.front();
++        if (use_extra_bufts) {
++            auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
++            auto ggml_backend_dev_get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
++                ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
++            if (ggml_backend_dev_get_extra_bufts_fn) {
++                ggml_backend_buffer_type_t * extra_bufts = ggml_backend_dev_get_extra_bufts_fn(cpu_dev);
++                while (extra_bufts && *extra_bufts) {
++                    buft_list.emplace_back(cpu_dev, *extra_bufts);
++                    ++extra_bufts;
++                }
++            }
++        }
++
++        buft_list.emplace_back(cpu_dev, ggml_backend_dev_buffer_type(cpu_dev));
++        return buft_list;
++    }
++
+     // add ACCEL buffer types
+     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+@@ -7761,7 +7788,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
+ 
+     ml.done_getting_tensors();
+ 
++    LLAMA_LOG_INFO("%s: done_getting_tensors complete\n", __func__);
++
+     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
++    LLAMA_LOG_INFO("%s: init_mappings complete (%zu mappings)\n", __func__, ml.mappings.size());
+     pimpl->mappings.reserve(ml.mappings.size());
+ 
+     // create the backend buffers
+@@ -7772,6 +7802,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
+     const size_t n_max_backend_buffer = ml.ctx_map.size() * ml.files.size();
+     pimpl->ctxs_bufs.reserve(n_max_backend_buffer);
+ 
++    LLAMA_LOG_INFO("%s: preparing backend buffers for %zu contexts\n", __func__, ml.ctx_map.size());
++
+     for (auto & [buft, ctx_ptr] : ml.ctx_map) {
+         ggml_context * ctx = ctx_ptr.get();
+ 
+@@ -7800,6 +7832,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
+         std::vector<ggml_backend_buffer_ptr> bufs;
+         if (ml.use_mmap && use_mmap_buffer && buffer_from_host_ptr_supported && is_default_buft) {
+             GGML_ASSERT(!ml.no_alloc);
++            LLAMA_LOG_INFO("%s: buffer_from_host_ptr path buft=%s\n", __func__, ggml_backend_buft_name(buft));
+             for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
+                 // only the mmap region containing the tensors in the model is mapped to the backend buffer
+                 // this is important for metal with apple silicon: if the entire model could be mapped to a metal buffer,
+@@ -7822,16 +7855,23 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
+         } else {
+             ggml_backend_buffer_t buf;
+             if (ml.no_alloc) {
++                LLAMA_LOG_INFO("%s: allocating dummy buffer buft=%s\n", __func__, ggml_backend_buft_name(buft));
+                 buf = ggml_backend_buft_alloc_buffer(buft, /*size =*/ 0); // dummy buffer
+                 for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                     t->buffer = buf; // set dummy buffer for weights so that the backend scheduler won't try to allocate them
+                 }
+             } else {
++                LLAMA_LOG_INFO("%s: allocating ctx tensors buft=%s\n", __func__, ggml_backend_buft_name(buft));
+                 buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft); // real buffer
+             }
+             if (buf == nullptr) {
+                 throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
+             }
++            LLAMA_LOG_INFO(
++                "%s: allocated ctx tensors buft=%s size=%.2f MiB\n",
++                __func__,
++                ggml_backend_buft_name(buft),
++                ggml_backend_buffer_get_size(buf) / 1024.0 / 1024.0);
+             if (use_mlock && ggml_backend_buffer_is_host(buf)) {
+                 pimpl->mlock_bufs.emplace_back(new llama_mlock);
+                 auto & mlock_buf = pimpl->mlock_bufs.back();
+@@ -7855,6 +7895,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
+         ctx_buf_maps.emplace_back(ctx, buf_map);
+     }
+ 
++    LLAMA_LOG_INFO("%s: backend buffer preparation complete\n", __func__);
++
+     if (llama_supports_gpu_offload()) {
+         const int n_gpu = std::min(n_gpu_layers, int(hparams.n_layer));
+ 

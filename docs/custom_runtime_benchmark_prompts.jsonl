@@ -1,0 +1,3 @@
+{"prompt_id":"short_fact","prompt":"Write one sentence about why fast on-device AI matters.","max_new_tokens":64}
+{"prompt_id":"reasoning_small","prompt":"A phone can process 9 tokens per second for 20 seconds. How many tokens can it process? Answer briefly.","max_new_tokens":64}
+{"prompt_id":"chat_medium","prompt":"Explain in two short paragraphs why measuring sustained performance is different from measuring peak performance.","max_new_tokens":64}
