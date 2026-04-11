@@ -72,12 +72,6 @@ std::uint32_t GreedySampler::sample(const std::span<const float> logits) const {
     return static_cast<std::uint32_t>(std::distance(logits.begin(), max_it));
 }
 
-Tokenizer::Tokenizer(TokenizerConfig config) : config_(config) {}
-
-const TokenizerConfig& Tokenizer::config() const {
-    return config_;
-}
-
 Runtime::Runtime(RuntimeOptions options) : options_(options) {}
 
 const RuntimeOptions& Runtime::options() const {

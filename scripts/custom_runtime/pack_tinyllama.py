@@ -34,6 +34,83 @@ TOKENIZER_FILES = [
     "special_tokens_map.json",
 ]
 
+VOCAB_BIN_VERSION = 1
+VOCAB_BIN_MAGIC = b"VBIN"
+
+
+def write_vocab_bin(model_dir: Path, output_dir: Path) -> dict:
+    """Extract vocabulary and BPE merges from tokenizer.json and write vocab.bin."""
+    import struct
+
+    tokenizer_json_path = model_dir / "tokenizer.json"
+    if not tokenizer_json_path.is_file():
+        raise SystemExit(f"missing tokenizer.json: {tokenizer_json_path}")
+
+    with tokenizer_json_path.open("r", encoding="utf-8") as f:
+        tokenizer_data = json.load(f)
+
+    model_data = tokenizer_data.get("model", {})
+    vocab_data = model_data.get("vocab", {})
+    merges_data = model_data.get("merges", [])
+
+    if not vocab_data:
+        raise SystemExit("vocab not found in tokenizer.json model section")
+    if not merges_data:
+        raise SystemExit("merges not found in tokenizer.json model section")
+
+    vocab_size = len(vocab_data)
+    merges_count = len(merges_data)
+
+    # Header: magic (4) + version (4) + vocab_size (4) + merges_count (4) = 16 bytes
+    header = struct.pack("<4sIII", VOCAB_BIN_MAGIC, VOCAB_BIN_VERSION, vocab_size, merges_count)
+
+    # Build vocab entries
+    # Each entry: piece_len (2) + piece_bytes + id (4) + score (4)
+    vocab_entries = []
+    for piece, idx in vocab_data.items():
+        piece_bytes = piece.encode("utf-8")
+        # score from merges list position, or default
+        score = 0.0
+        vocab_entries.append((piece_bytes, int(idx), score))
+
+    # Build merges entries
+    # Each entry: piece1_len (2) + piece1_bytes + piece2_len (2) + piece2_bytes
+    merge_entries = []
+    for merge in merges_data:
+        # merge is like "▁ t" - space character before text
+        parts = merge.split(" ")
+        if len(parts) == 2:
+            p1, p2 = parts[0].encode("utf-8"), parts[1].encode("utf-8")
+            merge_entries.append((p1, p2))
+        else:
+            raise SystemExit(f"unexpected merge format: {repr(merge)}")
+
+    # Calculate vocab section size
+    vocab_section = b"".join(
+        struct.pack("<H", len(pb)) + pb + struct.pack("<If", idx, score)
+        for pb, idx, score in vocab_entries
+    )
+
+    # Calculate merges section size
+    merges_section = b"".join(
+        struct.pack("<H", len(p1)) + p1 + struct.pack("<H", len(p2)) + p2
+        for p1, p2 in merge_entries
+    )
+
+    vocab_bin_path = output_dir / "tokenizer" / "vocab.bin"
+    with vocab_bin_path.open("wb") as f:
+        f.write(header)
+        f.write(struct.pack("<I", len(vocab_section)))
+        f.write(vocab_section)
+        f.write(struct.pack("<I", len(merges_section)))
+        f.write(merges_section)
+
+    return {
+        "vocab_size": vocab_size,
+        "merges_count": merges_count,
+        "vocab_bin_sha256": sha256_file(vocab_bin_path),
+    }
+
 
 def required_tensor_names(layer_count: int):
     names = [
@@ -170,6 +247,8 @@ def write_packed_model(model_dir: Path, output_dir: Path, tensor_names: list[str
             raise SystemExit(f"missing tokenizer file: {source}")
         shutil.copy2(source, tokenizer_dir / file_name)
 
+    vocab_info = write_vocab_bin(model_dir, output_dir)
+
     entries = []
     payloads = []
     current_offset = HEADER_STRUCT.size
@@ -250,6 +329,7 @@ def write_packed_model(model_dir: Path, output_dir: Path, tensor_names: list[str
         "source_dtype": str(config.get("torch_dtype", "unknown")),
         "tensor_count": len(entries),
         "tokenizer_files": TOKENIZER_FILES,
+        "vocab_bin": vocab_info,
         "tensors": entries,
     }
     with (output_dir / "manifest.json").open("w", encoding="utf-8") as f:

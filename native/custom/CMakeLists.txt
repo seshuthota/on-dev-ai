@@ -14,6 +14,7 @@ add_library(
     src/packed_model_reader.cpp
     src/packed_tensor_reader.cpp
     src/reference_kernels.cpp
+    src/tokenizer.cpp
 )
 
 target_include_directories(
@@ -86,6 +87,17 @@ add_executable(
 
 target_link_libraries(
     test_matvec
+    PRIVATE
+    ondevai_custom_runtime
+)
+
+add_executable(
+    run_tokenizer
+    tools/run_tokenizer.cpp
+)
+
+target_link_libraries(
+    run_tokenizer
     PRIVATE
     ondevai_custom_runtime
 )

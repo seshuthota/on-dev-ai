@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OnDevAI is a **Snapdragon 8 Elite hardware-specific LLM inference app** focused on measuring and optimizing token generation performance. It combines a Kotlin/Compose Android UI with a native C++ inference engine built on llama.cpp.
+OnDevAI is a **Snapdragon 8 Elite hardware-specific LLM inference app** focused on measuring and optimizing token generation performance. It combines a Kotlin/Compose Android UI with a native C++ inference engine.
+
+**Current direction:** The custom runtime (under `native/custom/`) is the mainline. The llama.cpp engine is preserved but secondary. TinyLlama-1.1B-Chat-v1.0 is the target model.
 
 Target hardware: **arm64-v8a only, Snapdragon 8 Elite with Adreno GPU**
-Primary acceleration path: **OpenCL via Adreno GPU**
-Secondary/validation path: **CPU**
 
 ## Build Commands
 
@@ -23,20 +23,27 @@ Secondary/validation path: **CPU**
 ./scripts/adb_push_model.sh /path/to/model.gguf
 
 # Build native library only (for fast iteration on C++ code)
-./gradlew :app:assembleDebug  # rebuilds native via CMake
+./gradlew :app:assembleDebug
 
 # View runtime diagnostics on device
 adb logcat -s OnDevAI
+
+# Run custom runtime tests (from native/build-llama or via cmake)
+# Tests are in native/custom/tests/
+
+# Pack TinyLlama to custom runtime format
+python3 scripts/custom_runtime/pack_tinyllama.py /path/to/TinyLlama-1.1B-Chat-v1.0
+
+# Run desktop reference tool
+./native/build-llama/run_reference --model packed_tinyllama.bin --prompt "Hello world"
 ```
 
 ## Architecture
 
 ```
-Compose UI (Kotlin) → ViewModel (StateFlow) → NativeBridge (JNI) → AppEngine (C++)
+Compose UI (Kotlin) → ViewModel (StateFlow) → NativeBridge (JNI) → CustomRuntime (C++)
                                                               ↓
-                                                        llama.cpp / ggml
-                                                              ↓
-                                                    CPU ←→ GPU_OPENCL (disabled) ←→ HTP (experimental)
+                                                        llama.cpp / ggml (legacy)
 ```
 
 ### Key Source Locations
@@ -44,64 +51,65 @@ Compose UI (Kotlin) → ViewModel (StateFlow) → NativeBridge (JNI) → AppEngi
 - **UI**: `app/android/app/src/main/java/ai/ondev/snapdragonlab/ui/`
 - **ViewModel & State**: `app/android/app/src/main/java/ai/ondev/snapdragonlab/MainViewModel.kt`
 - **JNI Bridge**: `app/android/app/src/main/java/ai/ondev/snapdragonlab/NativeBridge.kt`
-- **Native Engine**: `native/engine/src/app_engine.cpp` — owns model lifecycle, generation loop, benchmark execution
-- **JNI Entry Points**: `native/jni/jni_bridge.cpp`
-- **Native Headers**: `native/engine/include/app_engine.h`
+- **Custom Runtime**: `native/custom/` — owned inference engine
+- **Custom Runtime Headers**: `native/custom/include/`
+- **Packer Script**: `scripts/custom_runtime/pack_tinyllama.py`
+- **Reference Tools**: `native/custom/tools/run_reference.cpp`
+
+### Custom Runtime Structure
+
+```
+native/custom/
+  include/           # Headers: runtime.h, model.h, tensor.h, tokenizer.h, sampler.h, kv_cache.h
+  src/               # Implementation: runtime.cpp, model_loader.cpp, layers.cpp, etc.
+  tools/             # Desktop reference tools (run_reference.cpp)
+  tests/             # Unit tests: test_rmsnorm.cpp, test_rope.cpp, test_matvec.cpp
+```
 
 ### Native Build
 
-The native layer uses CMake with the build tree at `native/build-llama`. The `ondevai_native` shared library links against `llama.cpp` (built from `native/third_party/llama.cpp`). **GGML_OPENCL is currently OFF** in `native/CMakeLists.txt` due to Android 16 namespace isolation (see below).
-
-**Critical ARM CPU flags:** `GGML_CPU_ARM_ARCH="armv8.5-a+fp16+i8mm+dotprod"` must be set for SIMD optimization. Without this (or with `GGML_NATIVE=OFF` alone), no ARM64 NEON/SIMD instructions are compiled, resulting in ~0.5 tok/s instead of ~1.0 tok/s on Snapdragon 8 Elite.
+The native layer uses CMake with the build tree at `native/build-llama`. The custom runtime is built as part of the main CMake configuration. ARM SIMD flags are critical: `GGML_CPU_ARM_ARCH="armv8.5-a+fp16+i8mm+dotprod"` for optimal performance.
 
 ### Backend Selection
 
-Backend target ("cpu" or "opencl") is passed at model load time. The `AppEngine::FindOpenClDeviceLocked()` method scans `ggml_backend_dev_count()` for a device named "GPUOpenCL" or registered under "OpenCL". If the requested backend is unavailable, model loading fails with a diagnostic message — no silent fallback occurs. The Settings screen detects whether OpenCL is in the backend inventory and disables the "Use OpenCL" button when unavailable.
+The custom runtime targets Android CPU first. The legacy llama.cpp path supports "cpu" or "opencl" backends via `AppEngine::FindOpenClDeviceLocked()`. OpenCL is disabled due to Android 16 namespace isolation (see below).
 
-### Model Storage
+## Model & Packed Format
 
-Models must be accessible from native code via internal app storage (`files/models/` under the app UID). The `MainViewModel::prepareModelForNativeLoad()` copies from external paths to internal storage to ensure reliable native access. Model path is printed in diagnostics at `app: loadStatus`.
+**Target Model:** TinyLlama-1.1B-Chat-v1.0 (`/home/curious/models/TinyLlama-1.1B-Chat-v1.0/`)
+
+**Packed Format v1:** Own FP16 format (not GGUF). Created by `scripts/custom_runtime/pack_tinyllama.py`.
+
+Format artifacts:
+- `model.bin` — FP16 weights with header + tensor directory
+- `tokenizer/` — tokenizer model/config
+- `manifest.json` — metadata
 
 ## Performance Metrics
 
-Benchmark results are persisted as JSON lines to `files/benchmarks/history.jsonl` in internal storage. Key metrics:
-- **TTFT** (Time To First Token): `ttft_ms` in benchmark output
+Benchmark results persisted to `files/benchmarks/history.jsonl` as JSON lines:
+- **TTFT**: `ttft_ms`
 - **Decode throughput**: `tok_per_sec`
 - **Total elapsed**: `elapsed_ms`
 
 Benchmark modes: `smoke` (1 short prompt), `standard` (3 prompts of varying length)
 
-## CPU Benchmark Performance (Snapdragon 8 Elite, Qwen3-2B-Q4_K_M)
+## CPU Benchmark Performance (Snapdragon 8 Elite, TinyLlama-1.1B-Q4_K_M via llama.cpp)
 
-With `GGML_CPU_ARM_ARCH=armv8.5-a+fp16+i8mm+dotprod` and CPU at 2.4 GHz max:
-- **smoke**: ~0.9-1.0 tok/s
-- **standard short**: ~0.97 tok/s
-- **standard medium**: ~0.90 tok/s
-- **standard long**: ~0.86 tok/s
-
-Without ARM SIMD flags (bare `GGML_NATIVE=OFF`), performance was ~0.45-0.5 tok/s — a 2x regression.
-
-The ~1 tok/s ceiling is the genuine limit of the CPU-only path. GPU acceleration via Adreno is the target for higher throughput, but is blocked by Android 16 namespace isolation (see below).
+~1.0 tok/s with `GGML_CPU_ARM_ARCH=armv8.5-a+fp16+i8mm+dotprod`. The custom runtime is the target for higher throughput.
 
 ## Android 16 OpenCL Namespace Isolation (Known Issue)
 
-On the target device (Android 16 / SDK 36, custom ROM), the Qualcomm vendor `libOpenCL.so` (ICD loader) links against `libcutils.so` which is inaccessible in a third-party app's namespace:
+On Android 16 / SDK 36, the Qualcomm vendor `libOpenCL.so` cannot be loaded due to namespace isolation:
 
 ```
 dlopen failed: library "libcutils.so" not found: needed by ... libOpenCL.so in namespace clns-9
 ```
 
-The vendor library stack (`/vendor/lib64/libOpenCL.so`, `libOpenCL_adreno.so`, `libcutils.so`) is present and self-contained, but the Android 16 namespace isolation prevents third-party apps from accessing `/system/lib64/` where `libcutils.so` lives.
-
-Current resolution: `GGML_OPENCL=OFF` in the build. The app runs on CPU only. The Settings screen shows a clear diagnostic explaining the situation.
-
-Potential fixes to investigate:
-1. Use `android_dlopen_ext` from a native shim to load the vendor library with an explicit namespace that includes `/system/lib64`
-2. Test on a device/ROM with more permissive namespace configuration
-3. Root access to modify the namespace configuration
+Current resolution: `GGML_OPENCL=OFF` in the build. CPU-only operation.
 
 ## Important Constraints
 
 - **arm64-v8a only** — no other ABIs are configured or tested
-- **minSdk 31 / targetSdk 35** (built against SDK 35)
-- The app is a **performance lab**, not a consumer product — UI polish is intentionally minimal
+- **minSdk 31 / targetSdk 35**
+- The app is a **performance lab**, not a consumer product
