@@ -13,6 +13,8 @@ VERSION = 1
 DTYPE_FP16 = 1
 ALIGNMENT = 64
 HEADER_STRUCT = struct.Struct("<4sIIIIIIIIIIIffQQQ")
+# Checksum fields: 64 bytes each for SHA-256 hex strings (64 chars = 32 bytes = 256 bits)
+CHECKSUM_BYTES = 64
 
 
 EXPECTED_CONFIG = {
@@ -251,7 +253,7 @@ def write_packed_model(model_dir: Path, output_dir: Path, tensor_names: list[str
 
     entries = []
     payloads = []
-    current_offset = HEADER_STRUCT.size
+    current_offset = HEADER_STRUCT.size + 2 * CHECKSUM_BYTES
 
     provisional_entries = [
         {
@@ -263,8 +265,10 @@ def write_packed_model(model_dir: Path, output_dir: Path, tensor_names: list[str
         for name in tensor_names
     ]
     directory_size = len(build_directory_bytes(provisional_entries))
-    data_offset = align_up(HEADER_STRUCT.size + directory_size)
+    data_offset = align_up(HEADER_STRUCT.size + 2 * CHECKSUM_BYTES + directory_size)
     current_offset = data_offset
+
+    source_weight_sha256 = sha256_file(weights_path)
 
     with safe_open(str(weights_path), framework="pt", device="cpu") as tensors:
         for name in tensor_names:
@@ -300,13 +304,19 @@ def write_packed_model(model_dir: Path, output_dir: Path, tensor_names: list[str
         len(entries),
         float(config["rope_theta"]),
         float(config["rms_norm_eps"]),
-        HEADER_STRUCT.size,
+        HEADER_STRUCT.size + 2 * CHECKSUM_BYTES,
         data_offset,
         current_offset,
     )
 
+    # Pack checksums as 64-byte zero-padded hex strings
+    source_hex = source_weight_sha256.encode("ascii")
+    packed_sha256_placeholder = b"\x00" * CHECKSUM_BYTES
+
     with model_bin.open("wb") as f:
         f.write(header)
+        f.write(source_hex)
+        f.write(packed_sha256_placeholder)
         f.write(directory)
         f.write(b"\0" * (data_offset - f.tell()))
         for offset, raw in payloads:
@@ -315,13 +325,19 @@ def write_packed_model(model_dir: Path, output_dir: Path, tensor_names: list[str
             f.write(b"\0" * (offset - f.tell()))
             f.write(raw)
 
+    # Compute and patch packed_model_sha256 into header
+    file_sha256 = sha256_file(model_bin)
+    with model_bin.open("r+b") as f:
+        f.seek(HEADER_STRUCT.size + CHECKSUM_BYTES)
+        f.write(file_sha256.encode("ascii"))
+
     manifest = {
         "schema_version": 1,
         "model_id": "TinyLlama-1.1B-Chat-v1.0",
         "model_family": "tinyllama_v1",
         "source_model_path": str(model_dir),
-        "source_weight_sha256": sha256_file(weights_path),
-        "packed_model_sha256": sha256_file(model_bin),
+        "source_weight_sha256": source_weight_sha256,
+        "packed_model_sha256": file_sha256,
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "packer_version": 1,
         "runtime_context_cap": context_cap,
