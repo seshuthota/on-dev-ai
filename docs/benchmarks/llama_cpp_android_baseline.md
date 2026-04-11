@@ -34,6 +34,19 @@
 
 **Best config:** threads=6, cpu_mask=0xff (all 8 cores)
 
+## Sustained 4B Check
+
+Qwen3.5 4B Q4_K_M was also run with `max_new_tokens=256`, `threads=6`, `cpu_mask=0xff`, and verified 4B metadata in the logs.
+
+| Prompt | TTFT (ms) | Decode (tok/s) | Generated | Elapsed (ms) |
+|--------|-----------|----------------|-----------|--------------|
+| short_fact | 1505.78 | 16.46 | 255 | 17104.16 |
+| reasoning_small | 1420.30 | 15.44 | 163 | 12081.58 |
+| chat_medium | 642.18 | 14.39 | 255 | 18542.84 |
+| **Median** | **1420.30** | **15.44** | **255** | **17104.16** |
+
+The sustained decode rate remains in the same range as the 64-token median pass, so there is no immediate evidence of severe short-run throttling at this duration.
+
 ## Benchmark Infrastructure Fixes
 
 ### Model Checksum Verification
