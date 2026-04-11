@@ -14,6 +14,7 @@ add_library(
     src/kv_cache.cpp
     src/packed_model_reader.cpp
     src/packed_tensor_reader.cpp
+    src/profiler.cpp
     src/reference_kernels.cpp
     src/tokenizer.cpp
 )

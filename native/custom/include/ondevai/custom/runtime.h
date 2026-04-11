@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -18,6 +19,56 @@ struct RuntimeOptions {
     std::uint32_t context_length = 512;
     std::uint32_t thread_count = 1;
     bool greedy_decode = true;
+    bool enable_profiling = false;
+};
+
+struct ProfilerResult {
+    std::uint64_t rmsnorm_input_us = 0;
+    std::uint64_t matvec_qkv_us = 0;
+    std::uint64_t rope_q_us = 0;
+    std::uint64_t rope_k_us = 0;
+    std::uint64_t attention_us = 0;
+    std::uint64_t matvec_o_us = 0;
+    std::uint64_t rmsnorm_post_us = 0;
+    std::uint64_t matvec_mlp_us = 0;
+    std::uint64_t total_layer_us = 0;
+};
+
+class Profiler {
+public:
+    static Profiler& instance();
+
+    void begin_section(const char* name);
+    void end_section(const char* name);
+    void reset();
+
+    [[nodiscard]] ProfilerResult result() const;
+    [[nodiscard]] bool is_enabled() const { return enabled_; }
+    void set_enabled(bool e) { enabled_ = e; }
+
+private:
+    Profiler() = default;
+
+    struct SectionTiming {
+        const char* name = nullptr;
+        std::uint64_t elapsed_ns = 0;
+        std::chrono::steady_clock::time_point start;
+        bool active = false;
+    };
+    SectionTiming sections_[16];
+    std::size_t section_count_ = 0;
+
+    std::uint64_t rmsnorm_input_ns_ = 0;
+    std::uint64_t matvec_qkv_ns_ = 0;
+    std::uint64_t rope_q_ns_ = 0;
+    std::uint64_t rope_k_ns_ = 0;
+    std::uint64_t attention_ns_ = 0;
+    std::uint64_t matvec_o_ns_ = 0;
+    std::uint64_t rmsnorm_post_ns_ = 0;
+    std::uint64_t matvec_mlp_ns_ = 0;
+    std::uint64_t total_layer_ns_ = 0;
+
+    bool enabled_ = false;
 };
 
 struct RuntimeStatus {
@@ -48,6 +99,12 @@ public:
 
     // Access logits from last forward() call (for benchmarking)
     [[nodiscard]] std::span<const float> get_logits() const;
+
+    // Get profiler results if profiling is enabled
+    [[nodiscard]] ProfilerResult get_profiler_result() const;
+
+    // Enable/disable profiling
+    void set_profiler_enabled(bool enabled);
 
 private:
     void compute_layer(std::uint32_t layer_idx,

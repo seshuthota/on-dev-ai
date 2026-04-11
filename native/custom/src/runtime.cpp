@@ -205,6 +205,14 @@ std::span<const float> Runtime::get_logits() const {
     return logits_;
 }
 
+ProfilerResult Runtime::get_profiler_result() const {
+    return Profiler::instance().result();
+}
+
+void Runtime::set_profiler_enabled(bool enabled) {
+    Profiler::instance().set_enabled(enabled);
+}
+
 std::uint32_t Runtime::forward(std::uint32_t token_id, std::uint32_t position) {
     const auto& config = model_->config();
     const std::uint32_t hidden_size = config.hidden_size;
@@ -223,9 +231,12 @@ std::uint32_t Runtime::forward(std::uint32_t token_id, std::uint32_t position) {
     }
 
     // Step 2: Multi-layer forward pass
+    auto& profiler = Profiler::instance();
     std::copy(hidden_states_.begin(), hidden_states_.end(), residual_.begin());
     for (std::uint32_t layer_idx = 0; layer_idx < config.layer_count; ++layer_idx) {
+        profiler.begin_section("total_layer");
         compute_layer(layer_idx, residual_, hidden_states_, position);
+        profiler.end_section("total_layer");
         std::copy(hidden_states_.begin(), hidden_states_.end(), residual_.begin());
     }
 
@@ -250,6 +261,8 @@ void Runtime::compute_layer(std::uint32_t layer_idx,
                              std::span<const float> input,
                              std::span<float> output,
                              std::uint32_t position) {
+    auto& profiler = Profiler::instance();
+
     const auto& config = model_->config();
     const std::uint32_t hidden_size = config.hidden_size;
     const std::uint32_t kv_heads = config.kv_head_count;
@@ -277,22 +290,34 @@ void Runtime::compute_layer(std::uint32_t layer_idx,
     }
 
     // Input RMSNorm
+    profiler.begin_section("rmsnorm_input");
     rmsnorm_reference(input, input_ln_fp32, rms_norm_eps, norm_scratch_);
+    profiler.end_section("rmsnorm_input");
 
     // Q/K/V projections (FP16 matvec)
+    profiler.begin_section("matvec_qkv");
     matvec_fp16_reference(span_w(1), hidden_size, hidden_size, norm_scratch_, q_scratch_);
     matvec_fp16_reference(span_w(2), kv_heads * head_dim, hidden_size, norm_scratch_, k_scratch_);
     matvec_fp16_reference(span_w(3), kv_heads * head_dim, hidden_size, norm_scratch_, v_scratch_);
+    profiler.end_section("matvec_qkv");
 
     // RoPE on Q and K
+    profiler.begin_section("rope_q");
     rope_reference(q_scratch_, position, rope_theta, head_dim);
+    profiler.end_section("rope_q");
+    profiler.begin_section("rope_k");
     rope_reference(k_scratch_, position, rope_theta, head_dim);
+    profiler.end_section("rope_k");
 
     // Attention with KV cache
+    profiler.begin_section("attention");
     compute_attention(layer_idx, q_scratch_, k_scratch_, v_scratch_, attn_scratch_, position);
+    profiler.end_section("attention");
 
     // O projection
+    profiler.begin_section("matvec_o");
     matvec_fp16_reference(span_w(4), hidden_size, hidden_size, attn_scratch_, output);
+    profiler.end_section("matvec_o");
 
     // Residual 1: post_attn_out = input + attn_out
     // Save in residual_ (member buffer) to preserve for final residual after MLP
@@ -301,9 +326,12 @@ void Runtime::compute_layer(std::uint32_t layer_idx,
     }
 
     // Second RMSNorm (on post-attention residual)
+    profiler.begin_section("rmsnorm_post");
     rmsnorm_reference(residual_, post_attn_ln_fp32, rms_norm_eps, norm_scratch_);
+    profiler.end_section("rmsnorm_post");
 
-    // MLP gate/up projections (FP16 matvec into scratch buffer)
+    // MLP gate/up/down projections (FP16 matvec into scratch buffer)
+    profiler.begin_section("matvec_mlp");
     float* gate_ptr = mlp_scratch_.data();
     float* up_ptr = mlp_scratch_.data() + intermediate_size;
     matvec_fp16_reference(span_w(6), intermediate_size, hidden_size, norm_scratch_,
@@ -319,6 +347,7 @@ void Runtime::compute_layer(std::uint32_t layer_idx,
     // MLP down projection (into output, overwriting it)
     matvec_fp16_reference(span_w(8), hidden_size, intermediate_size,
                           std::span<float>(gate_ptr, intermediate_size), output);
+    profiler.end_section("matvec_mlp");
 
     // Residual 2: output = post_attn_out + mlp_out
     for (std::uint32_t i = 0; i < hidden_size; ++i) {
