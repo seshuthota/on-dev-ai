@@ -54,6 +54,8 @@ if(ONDEVAI_ENABLE_QNN)
     endif()
 endif()
 
+add_subdirectory(custom build-custom)
+
 set(LLAMA_CPP_DIR ${CMAKE_CURRENT_LIST_DIR}/third_party/llama.cpp)
 
 add_subdirectory(${LLAMA_CPP_DIR} build-llama EXCLUDE_FROM_ALL)
