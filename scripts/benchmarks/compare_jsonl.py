@@ -8,8 +8,10 @@ grouped by backend, quant_format, model_id, prompt_id, threads, cpu_mask.
 
 import argparse
 import json
+import re
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -44,6 +46,28 @@ def group_key(row: dict[str, Any]) -> tuple:
     )
 
 
+def extract_run_timestamp(row: dict[str, Any]) -> datetime:
+    """Extract timestamp from row for latest-only filtering."""
+    ts = row.get("timestamp") or row.get("run_timestamp")
+    if ts:
+        try:
+            # Handle both ISO strings and unix timestamps
+            if isinstance(ts, (int, float)):
+                return datetime.fromtimestamp(ts)
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            pass
+    # Fallback: parse from model_path or run_dir if present
+    run_dir = row.get("run_dir", "")
+    m = re.search(r"(\d{8}_\d{6})", run_dir)
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%Y%m%d_%H%M%S")
+        except ValueError:
+            pass
+    return datetime.min
+
+
 def compute_median(values: list[float]) -> Optional[float]:
     """Compute median of values, returning None if empty."""
     if not values:
@@ -76,6 +100,34 @@ def main() -> None:
         "-o",
         help="Output file (default: stdout)",
     )
+    parser.add_argument(
+        "--model-id",
+        action="append",
+        dest="model_ids",
+        help="Filter to specific model_id(s). Can be specified multiple times.",
+    )
+    parser.add_argument(
+        "--prompt-id",
+        action="append",
+        dest="prompt_ids",
+        help="Filter to specific prompt_id(s). Can be specified multiple times.",
+    )
+    parser.add_argument(
+        "--status",
+        choices=["ok", "failed", "all"],
+        default="all",
+        help="Filter by status (default: all). Use 'ok' to skip failed rows.",
+    )
+    parser.add_argument(
+        "--latest-only",
+        action="store_true",
+        help="Only keep the latest row per group (by timestamp in run_dir).",
+    )
+    parser.add_argument(
+        "--since",
+        dest="since",
+        help="Only include rows since a run timestamp (e.g., 20260411_212834).",
+    )
 
     args = parser.parse_args()
 
@@ -91,10 +143,49 @@ def main() -> None:
         print("No data found in input files.", file=sys.stderr)
         sys.exit(1)
 
+    # Apply filters
+    if args.model_ids:
+        all_rows = [r for r in all_rows if r.get("model_id") in args.model_ids]
+
+    if args.prompt_ids:
+        all_rows = [r for r in all_rows if r.get("prompt_id") in args.prompt_ids]
+
+    if args.status == "ok":
+        all_rows = [r for r in all_rows if r.get("status") == "ok"]
+
+    if args.since:
+        def row_timestamp(row: dict[str, Any]) -> datetime:
+            return extract_run_timestamp(row)
+
+        def run_dir_timestamp(row: dict[str, Any]) -> datetime:
+            run_dir = row.get("run_dir", "")
+            m = re.search(r"(\d{8}_\d{6})", run_dir)
+            if m:
+                try:
+                    return datetime.strptime(m.group(1), "%Y%m%d_%H%M%S")
+                except ValueError:
+                    pass
+            return datetime.min
+
+        since_dt = datetime.strptime(args.since, "%Y%m%d_%H%M%S")
+        all_rows = [r for r in all_rows if run_dir_timestamp(r) >= since_dt]
+
+    if not all_rows:
+        print("No rows after filtering.", file=sys.stderr)
+        sys.exit(1)
+
     grouped: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
     for row in all_rows:
         key = group_key(row)
         grouped[key].append(row)
+
+    # Apply latest-only after grouping
+    if args.latest_only:
+        for key in grouped:
+            rows = grouped[key]
+            # Sort by timestamp (latest first) and keep only the first
+            sorted_rows = sorted(rows, key=extract_run_timestamp, reverse=True)
+            grouped[key] = [sorted_rows[0]] if sorted_rows else []
 
     output = sys.stdout
     if args.output:

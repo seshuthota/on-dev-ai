@@ -182,13 +182,36 @@ echo "[info] Ctx: ${CTX}, max-new-tokens: ${MAX_NEW_TOKENS}"
 echo "[info] Run dir: ${RUN_DIR}"
 echo "[info] Output: ${OUTPUT_JSONL}"
 
+MODEL_CHECKSUM="$(sha256sum "${MODEL}" | awk '{print $1}')"
+
 if [[ "${REUSE_DEVICE_ARTIFACTS}" == "true" ]]; then
   echo "[info] Reusing device artifacts, verifying on-device files..."
   if ! adb -s "${SERIAL}" shell "test -f '${TARGET_DIR}/install/bin/llama-completion' && test -f '${TARGET_DIR}/model.gguf'" 2>/dev/null; then
     echo "Error: Device artifacts missing. Run without --reuse-device-artifacts first." >&2
     exit 1
   fi
-  echo "[info] Device artifacts verified."
+
+  echo "[info] Verifying device model matches host model..."
+  DEVICE_CHECKSUM_FILE="${TARGET_DIR}/model.sha256"
+  EXPECTED_CHECKSUM="${MODEL_CHECKSUM}"
+
+  if ! adb -s "${SERIAL}" shell "test -f '${DEVICE_CHECKSUM_FILE}'" 2>/dev/null; then
+    echo "Error: Device checksum file missing. Re-run without --reuse-device-artifacts to push model + checksum." >&2
+    exit 1
+  fi
+
+  DEVICE_CHECKSUM="$(adb -s "${SERIAL}" shell "cat '${DEVICE_CHECKSUM_FILE}'" 2>/dev/null | tr -d '\r' | tr -d ' \n')"
+
+  if [[ "${DEVICE_CHECKSUM}" != "${EXPECTED_CHECKSUM}" ]]; then
+    echo "Error: Device model checksum mismatch." >&2
+    echo "  Expected (host): ${EXPECTED_CHECKSUM}" >&2
+    echo "  Got (device):    ${DEVICE_CHECKSUM}" >&2
+    echo "" >&2
+    echo "The on-device model does not match the host model you specified." >&2
+    echo "Re-run without --reuse-device-artifacts to push the correct model." >&2
+    exit 1
+  fi
+  echo "[info] Device model checksum verified (${DEVICE_CHECKSUM})."
 else
   adb -s "${SERIAL}" shell "rm -rf '${TARGET_DIR}' && mkdir -p '${TARGET_DIR}'" >/dev/null
 
@@ -197,9 +220,10 @@ else
 
   echo "[info] Pushing model to device..."
   adb -s "${SERIAL}" push "${MODEL}" "${TARGET_DIR}/model.gguf" >/dev/null
-fi
 
-MODEL_CHECKSUM="$(sha256sum "${MODEL}" | awk '{print $1}')"
+  echo "[info] Pushing model checksum to device..."
+  echo -n "${MODEL_CHECKSUM}" | adb -s "${SERIAL}" shell "cat > '${TARGET_DIR}/model.sha256'"
+fi
 
 resolve_cpu_mask() {
   local mask="$1"

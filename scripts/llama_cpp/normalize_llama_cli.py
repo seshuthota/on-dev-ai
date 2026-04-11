@@ -67,6 +67,37 @@ def parse_perf_lines(log_content: str) -> dict[str, Any]:
     return result
 
 
+def parse_model_metadata(log_content: str) -> dict[str, Any]:
+    """Parse model metadata from llama-cli log content for verification."""
+    result = {
+        "model_name_log": None,
+        "model_type_log": None,
+        "model_params_log": None,
+        "file_size_log": None,
+    }
+
+    for line in log_content.splitlines():
+        line = line.strip()
+
+        m = re.search(r"general\.name\s*=\s*(.+)", line)
+        if m:
+            result["model_name_log"] = m.group(1).strip()
+
+        m = re.search(r"model type\s*=\s*(.+)", line)
+        if m:
+            result["model_type_log"] = m.group(1).strip()
+
+        m = re.search(r"model params\s*=\s*(.+)", line)
+        if m:
+            result["model_params_log"] = m.group(1).strip()
+
+        m = re.search(r"file size\s*=\s*(.+)", line)
+        if m:
+            result["file_size_log"] = m.group(1).strip()
+
+    return result
+
+
 def parse_generated_tokens(log_content: str) -> int:
     """Extract generated token count from log content."""
     lines = log_content.splitlines()
@@ -130,6 +161,11 @@ def build_row(
         "cpu_mask": cpu_mask,
         "llama_cpp_commit": llama_cpp_commit,
         "model_path": model_path,
+        "run_dir": str(run_dir),
+        "model_name_log": None,
+        "model_type_log": None,
+        "model_params_log": None,
+        "file_size_log": None,
         "status": "ok",
         "error": None,
         "raw_logs": None,
@@ -157,6 +193,13 @@ def build_row(
         row["status"] = "failed"
         row["error"] = f"No measured logs found for {prompt_id}"
         return row
+
+    # Parse model metadata from the first measured log for verification
+    metadata = parse_model_metadata(measured_logs[0])
+    row["model_name_log"] = metadata["model_name_log"]
+    row["model_type_log"] = metadata["model_type_log"]
+    row["model_params_log"] = metadata["model_params_log"]
+    row["file_size_log"] = metadata["file_size_log"]
 
     all_parsed = []
     for log_content in measured_logs:
@@ -385,6 +428,11 @@ def main() -> None:
                     "prompt_id": prompt_id,
                     "status": "failed",
                     "error": str(e),
+                    "run_dir": str(run_dir),
+                    "model_name_log": None,
+                    "model_type_log": None,
+                    "model_params_log": None,
+                    "file_size_log": None,
                 }
                 out_f.write(json.dumps(error_row) + "\n")
 
