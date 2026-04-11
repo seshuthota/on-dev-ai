@@ -55,18 +55,19 @@ Reason:
 Production artifacts:
 
 - `.gguf` model files for `llama.cpp`
-- recorded quantization format (`F16`, `Q8_0`, `Q6_K`, `Q5_K`, `Q4_K`, etc.)
+- recorded quantization format (`Q4_K_M` or best available Q4 as primary; `Q5_K`/`Q6_K` fallback tiers if Q4 quality is unacceptable; `Q8_0` and `F16` as quality/perf comparison reference only)
 - checksum and conversion command in benchmark metadata
 
 ### Experimental Runtime Format
 
-Owned packed **FP16** format remains useful for oracle and kernel experiments.
+Owned packed **FP16** format remains useful for oracle, kernel experiments, and reference correctness only.
 
 Reason:
 
 - current owned runtime already provides tensor-level confidence
 - useful for isolated kernel tests without full `llama.cpp` complexity
-- not the production inference path unless it beats `llama.cpp`
+- not the main performance target; Q4 GGUF is the primary mobile production format
+- not the production inference path unless it beats `llama.cpp` Q4
 
 ### Fixed Runtime Constraints
 
@@ -454,7 +455,7 @@ Push stock `llama.cpp` closer to the Snapdragon 8 Elite limit before writing sep
 Work order:
 
 1. Build and record stock `llama.cpp` Android baseline.
-2. Test quantization formats: FP16, Q8, Q6, Q5, Q4 where available and acceptable.
+2. Test quantization formats: Q4 first (`Q4_K_M` preferred when available), then Q5/Q6 fallback tiers if Q4 quality is unacceptable, then Q8/F16 as quality/perf comparison reference.
 3. Sweep thread count and batch/prompt parameters.
 4. Run big-core affinity and thermal stability experiments.
 5. Profile the limiting kernels in stock `llama.cpp`.
