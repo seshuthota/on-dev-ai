@@ -16,26 +16,26 @@ This checklist is the first execution slice from `RESET_PLAN_V2.md`.
 
 ## Day 2: Skeleton Target
 
-- [ ] Create `native/custom/include/`.
-- [ ] Create `native/custom/src/`.
-- [ ] Define `Tensor`.
-- [ ] Define `Model`.
-- [ ] Define `Runtime`.
-- [ ] Define `KvCache`.
-- [ ] Define `BenchmarkResult`.
-- [ ] Add a custom native target that compiles without replacing the existing app engine.
+- [x] Create `native/custom/include/`.
+- [x] Create `native/custom/src/`.
+- [x] Define `Tensor`.
+- [x] Define `Model`.
+- [x] Define `Runtime`.
+- [x] Define `KvCache`.
+- [x] Define `BenchmarkResult`.
+- [x] Add a custom native target that compiles without replacing the existing app engine.
 
 ## Day 3: Packer And Metadata
 
-- [ ] Create `scripts/custom_runtime/pack_tinyllama.py`.
-- [ ] Read `config.json`.
-- [ ] Read `model.safetensors`.
-- [ ] Convert BF16 source weights to FP16.
-- [ ] Write `manifest.json`.
-- [ ] Write `model.bin` header.
-- [ ] Write tensor directory.
-- [ ] Pack embeddings, `lm_head`, final norm, and layer 0 tensors.
-- [ ] Copy tokenizer artifacts.
+- [x] Create `scripts/custom_runtime/pack_tinyllama.py`.
+- [x] Read `config.json`.
+- [x] Read `model.safetensors`.
+- [x] Convert BF16 source weights to FP16.
+- [x] Write `manifest.json`.
+- [x] Write `model.bin` header.
+- [x] Write tensor directory.
+- [x] Pack embeddings, `lm_head`, final norm, and layer 0 tensors.
+- [x] Copy tokenizer artifacts.
 
 ## Day 4: Desktop Reference Loader
 

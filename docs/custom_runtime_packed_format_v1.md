@@ -37,6 +37,22 @@ C++ runtime owns:
 
 C++ runtime must not parse `safetensors`, GGUF, ONNX, or QAIRT artifacts in v1.
 
+## Packer Usage
+
+Dry-run validation does not require `torch` or `safetensors`:
+
+```bash
+python3 scripts/custom_runtime/pack_tinyllama.py --dry-run
+```
+
+Writing `model.bin` requires `torch`, `numpy`, and `safetensors`. Use the external QAIRT Python environment or another Python with those packages:
+
+```bash
+../OnDevAI_external/.conda-qairt310/bin/python \
+  scripts/custom_runtime/pack_tinyllama.py \
+  --output-dir .artifacts/custom-runtime/tinyllama-v1-layer0
+```
+
 ## Binary Rules
 
 - byte order: little-endian
