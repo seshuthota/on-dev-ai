@@ -36,6 +36,19 @@ struct ProfilerResult {
 
 class Profiler {
 public:
+    enum class SectionId : std::uint8_t {
+        rmsnorm_input = 0,
+        matvec_qkv,
+        rope_q,
+        rope_k,
+        attention,
+        matvec_o,
+        rmsnorm_post,
+        matvec_mlp,
+        total_layer,
+        count,
+    };
+
     static Profiler& instance();
 
     void begin_section(const char* name);
@@ -49,14 +62,11 @@ public:
 private:
     Profiler() = default;
 
-    struct SectionTiming {
-        const char* name = nullptr;
-        std::uint64_t elapsed_ns = 0;
-        std::chrono::steady_clock::time_point start;
-        bool active = false;
-    };
-    SectionTiming sections_[16];
-    std::size_t section_count_ = 0;
+    static constexpr std::size_t kSectionCount =
+        static_cast<std::size_t>(SectionId::count);
+
+    std::array<bool, kSectionCount> active_{};
+    std::array<std::chrono::steady_clock::time_point, kSectionCount> start_{};
 
     std::uint64_t rmsnorm_input_ns_ = 0;
     std::uint64_t matvec_qkv_ns_ = 0;
@@ -127,9 +137,14 @@ private:
     // Offsets into each layer's weight vector for each of the 9 matrices
     std::vector<std::array<std::size_t, 10>> layer_weight_offsets_;  // [22][10 offsets (9 starts + 1 end)]
 
-    // Working buffers
+    // Precomputed FP32 RMSNorm weights per layer (loaded once, reused every token)
+    std::vector<std::vector<float>> layer_input_ln_fp32_;    // [22][hidden_size]
+    std::vector<std::vector<float>> layer_post_attn_ln_fp32_; // [22][hidden_size]
+    std::vector<float> final_norm_fp32_;  // [hidden_size] final layer norm in FP32
+
+    // Working buffers (sized at load_model, reused across all forward calls)
     std::vector<float> hidden_states_;
-    std::vector<float> norm_scratch_;
+    std::vector<float> ln_scratch_;  // used for per-layer RMSNorm weight conversion
     std::vector<float> q_scratch_;
     std::vector<float> k_scratch_;
     std::vector<float> v_scratch_;

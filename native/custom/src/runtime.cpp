@@ -140,6 +140,12 @@ RuntimeStatus Runtime::load_model(std::unique_ptr<Model> model, const std::strin
         final_norm_fp16_ = std::move(result.fp16_data);
     }
 
+    // Precompute FP32 final norm weights once at load time
+    final_norm_fp32_.resize(config.hidden_size);
+    for (std::uint32_t i = 0; i < config.hidden_size; ++i) {
+        final_norm_fp32_[i] = fp16_to_float(final_norm_fp16_[i]);
+    }
+
     // Load layer weights into flat vectors with offset tracking
     layer_weights_.resize(config.layer_count);
     layer_weight_offsets_.resize(config.layer_count);
@@ -173,7 +179,7 @@ RuntimeStatus Runtime::load_model(std::unique_ptr<Model> model, const std::strin
 
     // Initialize working buffers
     hidden_states_.resize(config.hidden_size);
-    norm_scratch_.resize(config.hidden_size);
+    ln_scratch_.resize(config.hidden_size);
     q_scratch_.resize(config.hidden_size);
     k_scratch_.resize(config.kv_head_count * head_dim);
     v_scratch_.resize(config.kv_head_count * head_dim);
@@ -181,6 +187,25 @@ RuntimeStatus Runtime::load_model(std::unique_ptr<Model> model, const std::strin
     mlp_scratch_.resize(config.intermediate_size * 3);
     residual_.resize(config.hidden_size);
     logits_.resize(config.vocab_size);
+
+    // Precompute FP32 RMSNorm weights for all layers (done once at load time)
+    layer_input_ln_fp32_.resize(config.layer_count);
+    layer_post_attn_ln_fp32_.resize(config.layer_count);
+    for (std::uint32_t layer_idx = 0; layer_idx < config.layer_count; ++layer_idx) {
+        const auto& offsets = layer_weight_offsets_[layer_idx];
+        const std::vector<std::uint16_t>& lw = layer_weights_[layer_idx];
+
+        layer_input_ln_fp32_[layer_idx].resize(config.hidden_size);
+        layer_post_attn_ln_fp32_[layer_idx].resize(config.hidden_size);
+
+        auto ln0 = std::span<const std::uint16_t>{lw.data() + offsets[0], offsets[1] - offsets[0]};
+        auto ln5 = std::span<const std::uint16_t>{lw.data() + offsets[5], offsets[6] - offsets[5]};
+
+        for (std::uint32_t i = 0; i < config.hidden_size; ++i) {
+            layer_input_ln_fp32_[layer_idx][i] = fp16_to_float(ln0[i]);
+            layer_post_attn_ln_fp32_[layer_idx][i] = fp16_to_float(ln5[i]);
+        }
+    }
 
     model_bin_path_ = model_bin_path;
     model_ = std::move(model);
@@ -243,12 +268,8 @@ std::uint32_t Runtime::forward(std::uint32_t token_id, std::uint32_t position) {
     // Increment KV cache token count: all layers have appended their K/V
     kv_cache_.set_token_count(kv_cache_.token_count() + 1);
 
-    // Step 3: Final RMSNorm
-    std::vector<float> final_norm_fp32(hidden_size);
-    for (std::uint32_t i = 0; i < hidden_size; ++i) {
-        final_norm_fp32[i] = fp16_to_float(final_norm_fp16_[i]);
-    }
-    rmsnorm_reference(residual_, final_norm_fp32, rms_norm_eps, hidden_states_);
+    // Step 3: Final RMSNorm (using precomputed FP32 weights)
+    rmsnorm_reference(residual_, final_norm_fp32_, rms_norm_eps, hidden_states_);
 
     // Step 4: Compute logits
     matvec_fp16_reference(lm_head_fp16_, vocab_size, hidden_size, hidden_states_, logits_);
@@ -279,26 +300,20 @@ void Runtime::compute_layer(std::uint32_t layer_idx,
         return {lw.data() + offsets[idx], offsets[idx + 1] - offsets[idx]};
     };
 
-    // Convert RMSNorm weights from FP16 to float
-    std::vector<float> input_ln_fp32(hidden_size);
-    std::vector<float> post_attn_ln_fp32(hidden_size);
-    auto ln0 = span_w(0);
-    auto ln5 = span_w(5);
-    for (std::uint32_t i = 0; i < hidden_size; ++i) {
-        input_ln_fp32[i] = fp16_to_float(ln0[i]);
-        post_attn_ln_fp32[i] = fp16_to_float(ln5[i]);
-    }
+    // Use precomputed FP32 RMSNorm weights (loaded once at model load)
+    const std::vector<float>& input_ln_fp32 = layer_input_ln_fp32_[layer_idx];
+    const std::vector<float>& post_attn_ln_fp32 = layer_post_attn_ln_fp32_[layer_idx];
 
     // Input RMSNorm
     profiler.begin_section("rmsnorm_input");
-    rmsnorm_reference(input, input_ln_fp32, rms_norm_eps, norm_scratch_);
+    rmsnorm_reference(input, input_ln_fp32, rms_norm_eps, ln_scratch_);
     profiler.end_section("rmsnorm_input");
 
     // Q/K/V projections (FP16 matvec)
     profiler.begin_section("matvec_qkv");
-    matvec_fp16_reference(span_w(1), hidden_size, hidden_size, norm_scratch_, q_scratch_);
-    matvec_fp16_reference(span_w(2), kv_heads * head_dim, hidden_size, norm_scratch_, k_scratch_);
-    matvec_fp16_reference(span_w(3), kv_heads * head_dim, hidden_size, norm_scratch_, v_scratch_);
+    matvec_fp16_reference(span_w(1), hidden_size, hidden_size, ln_scratch_, q_scratch_);
+    matvec_fp16_reference(span_w(2), kv_heads * head_dim, hidden_size, ln_scratch_, k_scratch_);
+    matvec_fp16_reference(span_w(3), kv_heads * head_dim, hidden_size, ln_scratch_, v_scratch_);
     profiler.end_section("matvec_qkv");
 
     // RoPE on Q and K
@@ -327,16 +342,16 @@ void Runtime::compute_layer(std::uint32_t layer_idx,
 
     // Second RMSNorm (on post-attention residual)
     profiler.begin_section("rmsnorm_post");
-    rmsnorm_reference(residual_, post_attn_ln_fp32, rms_norm_eps, norm_scratch_);
+    rmsnorm_reference(residual_, post_attn_ln_fp32, rms_norm_eps, ln_scratch_);
     profiler.end_section("rmsnorm_post");
 
     // MLP gate/up/down projections (FP16 matvec into scratch buffer)
     profiler.begin_section("matvec_mlp");
     float* gate_ptr = mlp_scratch_.data();
     float* up_ptr = mlp_scratch_.data() + intermediate_size;
-    matvec_fp16_reference(span_w(6), intermediate_size, hidden_size, norm_scratch_,
+    matvec_fp16_reference(span_w(6), intermediate_size, hidden_size, ln_scratch_,
                           std::span<float>(gate_ptr, intermediate_size));
-    matvec_fp16_reference(span_w(7), intermediate_size, hidden_size, norm_scratch_,
+    matvec_fp16_reference(span_w(7), intermediate_size, hidden_size, ln_scratch_,
                           std::span<float>(up_ptr, intermediate_size));
 
     // SiLU activation
@@ -369,19 +384,23 @@ void Runtime::compute_attention(std::uint32_t layer_idx,
     // Append current K/V to cache at current position
     kv_cache_.append(layer_idx, k, v);
 
-    // seq_len is now position+1 (all tokens including current)
-    const std::size_t seq_len = kv_cache_.token_count();
+    // token_count tracks committed past tokens and is incremented once per forward step.
+    // After append(), the current token lives at index token_count, so attention length is +1.
+    const std::size_t seq_len = kv_cache_.token_count() + 1;
 
     // Get cached K/V for all positions 0..seq_len-1
     auto k_range = kv_cache_.get_k_range(layer_idx, 0, seq_len);
     auto v_range = kv_cache_.get_v_range(layer_idx, 0, seq_len);
 
     // Compute attention using GQA reference kernel
-    attention_gqa_reference(
+    const bool ok = attention_gqa_reference(
         q, k_range, v_range,
         static_cast<std::uint32_t>(seq_len),
         num_heads, kv_heads, head_dim,
         attn_output);
+    if (!ok) {
+        std::fill(attn_output.begin(), attn_output.end(), 0.0f);
+    }
 }
 
 ModelConfig tinyllama_v1_config() {
