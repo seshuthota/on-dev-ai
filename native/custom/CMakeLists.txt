@@ -101,3 +101,14 @@ target_link_libraries(
     PRIVATE
     ondevai_custom_runtime
 )
+
+add_executable(
+    dump_reference_tensors
+    tools/dump_reference_tensors.cpp
+)
+
+target_link_libraries(
+    dump_reference_tensors
+    PRIVATE
+    ondevai_custom_runtime
+)
