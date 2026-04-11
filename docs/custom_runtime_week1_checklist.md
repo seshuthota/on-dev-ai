@@ -48,10 +48,10 @@ This checklist is the first execution slice from `RESET_PLAN_V2.md`.
 
 ## Day 5: First Kernels
 
-- [ ] Implement RMSNorm reference kernel.
-- [ ] Implement RoPE reference kernel.
-- [ ] Implement FP16 matvec reference kernel.
-- [ ] Add deterministic tests.
+- [x] Implement RMSNorm reference kernel.
+- [x] Implement RoPE reference kernel.
+- [x] Implement FP16 matvec reference kernel.
+- [x] Add deterministic tests.
 - [ ] Compare at least one layer operation against a known reference.
 
 ## Week 1 Gate

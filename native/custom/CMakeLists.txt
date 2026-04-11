@@ -12,6 +12,7 @@ add_library(
     STATIC
     src/runtime.cpp
     src/packed_model_reader.cpp
+    src/reference_kernels.cpp
 )
 
 target_include_directories(
@@ -40,6 +41,39 @@ add_executable(
 
 target_link_libraries(
     run_reference
+    PRIVATE
+    ondevai_custom_runtime
+)
+
+add_executable(
+    test_rmsnorm
+    tests/test_rmsnorm.cpp
+)
+
+target_link_libraries(
+    test_rmsnorm
+    PRIVATE
+    ondevai_custom_runtime
+)
+
+add_executable(
+    test_rope
+    tests/test_rope.cpp
+)
+
+target_link_libraries(
+    test_rope
+    PRIVATE
+    ondevai_custom_runtime
+)
+
+add_executable(
+    test_matvec
+    tests/test_matvec.cpp
+)
+
+target_link_libraries(
+    test_matvec
     PRIVATE
     ondevai_custom_runtime
 )
