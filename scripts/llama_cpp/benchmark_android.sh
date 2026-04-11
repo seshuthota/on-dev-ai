@@ -248,7 +248,7 @@ else
 fi
 
 LLAMA_CLI="./bin/llama-cli"
-MODEL_PATH="./model.gguf"
+MODEL_PATH="${TARGET_DIR}/model.gguf"
 
 NORMALIZE_SCRIPT="${SCRIPT_DIR}/normalize_llama_cli.py"
 
@@ -297,7 +297,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
            --temp 0 \
            -C '${CPU_MASK_RESOLVED}' \
            --cpu-strict 1" \
-        > "${log_file}" 2>&1
+        < /dev/null > "${log_file}" 2>&1
     else
       adb -s "${SERIAL}" shell \
         "cd '${TARGET_DIR}/install' && \
@@ -309,7 +309,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
            -f '${device_prompt_file}' \
            --seed 0 \
            --temp 0" \
-        > "${log_file}" 2>&1
+        < /dev/null > "${log_file}" 2>&1
     fi
     run_rc=$?
     set -e
@@ -336,7 +336,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
            --temp 0 \
            -C '${CPU_MASK_RESOLVED}' \
            --cpu-strict 1" \
-        > "${log_file}" 2>&1
+        < /dev/null > "${log_file}" 2>&1
     else
       adb -s "${SERIAL}" shell \
         "cd '${TARGET_DIR}/install' && \
@@ -348,7 +348,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
            -f '${device_prompt_file}' \
            --seed 0 \
            --temp 0" \
-        > "${log_file}" 2>&1
+        < /dev/null > "${log_file}" 2>&1
     fi
     run_rc=$?
     set -e
