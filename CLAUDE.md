@@ -44,7 +44,7 @@ adb logcat -s OnDevAI
 # Build llama.cpp for Android arm64-v8a (outputs to .artifacts/llama-cpp/android-install/)
 ./scripts/llama_cpp/build_android.sh
 
-# Run benchmarks on Android device
+# Run llama-completion benchmarks on Android device
 # Requires: --serial (adb device), --model (GGUF path), --model-id
 ./scripts/llama_cpp/benchmark_android.sh \
   --serial 1234567890 \
@@ -54,8 +54,14 @@ adb logcat -s OnDevAI
   --cpu-mask auto-big \
   --runs 5 --warmup 1
 
-# Reuse device artifacts (skip re-push of model + binary if already on device)
-./scripts/llama_cpp/benchmark_android.sh ... --reuse-device-artifacts
+# Run llama-bench for lower-noise kernel-level profiling (prefill + decode separate)
+./scripts/llama_cpp/bench_android.sh \
+  --serial 1234567890 \
+  --model /path/to/model.Q4_K_M.gguf \
+  --model-id Qwen3.5-4B-Q4_K_M \
+  --threads 6 \
+  --cpu-mask auto-big \
+  --runs 3
 
 # Compare benchmark results across JSONL files
 python3 scripts/benchmarks/compare_jsonl.py files/benchmarks/llama_cpp_android.jsonl
