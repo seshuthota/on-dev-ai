@@ -248,6 +248,7 @@ int main(int argc, char* argv[]) {
     bool verify_determinism = false;
     bool enable_profiling = false;
     bool verbose = false;
+    std::uint32_t thread_count = 1;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -275,6 +276,8 @@ int main(int argc, char* argv[]) {
             verify_determinism = true;
         } else if (arg == "--profile") {
             enable_profiling = true;
+        } else if (arg == "--threads" && i + 1 < argc) {
+            thread_count = static_cast<std::uint32_t>(std::atoi(argv[++i]));
         } else if (arg == "-v" || arg == "--verbose") {
             verbose = true;
         } else if (arg == "--help" || arg == "-h") {
@@ -290,6 +293,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "  --mean             Use mean instead of median\n";
             std::cerr << "  --verify-determinism  Check first-token determinism\n";
             std::cerr << "  --profile          Enable per-kernel profiling\n";
+            std::cerr << "  --threads N        Worker thread count (default: 1)\n";
             std::cerr << "  -v, --verbose      Verbose decode output\n";
             std::cerr << "  --output-jsonl PATH  Append benchmark record here\n";
             return 0;
@@ -351,6 +355,7 @@ int main(int argc, char* argv[]) {
     // Create runtime
     ondevai::custom::RuntimeOptions runtime_opts;
     runtime_opts.context_length = 512;
+    runtime_opts.thread_count = thread_count;
     ondevai::custom::Runtime runtime(runtime_opts);
 
     // Load model into runtime

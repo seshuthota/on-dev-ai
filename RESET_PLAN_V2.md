@@ -1,4 +1,4 @@
-# Strategic Reset v2: Custom Runtime Mainline
+# Strategic Reset v3: llama.cpp Mainline, Device-Specific Optimization
 
 ## Purpose
 
@@ -15,17 +15,17 @@ The QAIRT/QNN path has already proven useful things:
 
 Those results are valuable, but they do not define the mainline anymore.
 
-The reset is:
+The reset is now:
 
-**Make the custom runtime the mainline. Freeze QAIRT/QNN as a sidecar baseline and optional future backend.**
+**Make `llama.cpp` the production inference base. Use the owned runtime as a correctness oracle, benchmark harness, and kernel lab. Freeze QAIRT/QNN as a sidecar baseline and optional future backend.**
 
-The goal is no longer to make every model fit Qualcomm tooling, keep fighting ONNX/GGUF builder edge cases, or expand supported formats before the engine exists.
+The goal is no longer to recreate a worse `llama.cpp` from scratch, make every model fit Qualcomm tooling, or keep fighting ONNX builder edge cases before performance evidence exists.
 
-The goal is now to own one model family, one runtime, one benchmark harness, and the backend decisions.
+The goal is now to run real models through `llama.cpp`, benchmark them rigorously on Snapdragon 8 Elite, then push beyond stock `llama.cpp` with device-specific tuning and kernels where profiling proves the win.
 
 ## Core Rule
 
-**Stop trying to make every model fit the phone through vendor tooling. Make one model fit the engine, then make the engine fit the phone.**
+**Start from the strongest working engine, then make that engine fit the phone. Every optimization must beat the same-protocol Android baseline.**
 
 ## 1. Frozen Decisions
 
@@ -38,65 +38,91 @@ These decisions are fixed for Milestones 0-3.
 Reason:
 
 - dense decoder-only Llama-style architecture
-- easier first owned-runtime target than Qwen3.5 or multimodal models
+- easier first production/lab target than Qwen3.5 or multimodal models
 - enough scale to matter, but small enough for first bring-up
 - tokenizer/config/weights are easier to inspect than vendor-prepared artifacts
 
-### Source Weights Format
+### Production Runtime Format
 
-Hugging Face `safetensors`
-
-Reason:
-
-- avoids early GGUF parser complexity
-- avoids ONNX, builder, and architecture-tag drift
-- gives a clean input for an owned packer
-
-### Runtime Format v1
-
-Owned packed **FP16** format only.
+GGUF for `llama.cpp` production runs.
 
 Reason:
 
-- fastest path to correctness
-- no Q4/Q8 until the engine works
-- no direct GGUF runtime loading in v1
+- aligns with the production inference base
+- gives immediate access to mature quantization formats
+- avoids blocking performance work on owned loader completeness
+
+Production artifacts:
+
+- `.gguf` model files for `llama.cpp`
+- recorded quantization format (`F16`, `Q8_0`, `Q6_K`, `Q5_K`, `Q4_K`, etc.)
+- checksum and conversion command in benchmark metadata
+
+### Experimental Runtime Format
+
+Owned packed **FP16** format remains useful for oracle and kernel experiments.
+
+Reason:
+
+- current owned runtime already provides tensor-level confidence
+- useful for isolated kernel tests without full `llama.cpp` complexity
+- not the production inference path unless it beats `llama.cpp`
 
 ### Fixed Runtime Constraints
 
 - context length: `512`
 - decode mode: greedy only
 - benchmark prompts: three prompts checked into the repo
-- mainline backend through Milestone 3: Android CPU only
+- mainline backend through Milestone 3: `llama.cpp` Android CPU only
 
 ## 2. Project Split
 
-### Track A: Custom Runtime Mainline
+### Track A: llama.cpp Production Mainline
 
 Purpose:
 
-- build an owned inference engine
-- own the model format
-- own the decode loop
-- own the benchmark harness
-- measure CPU first, Vulkan second
+- run real LLM inference through `llama.cpp`
+- establish the strongest CPU baseline on Snapdragon 8 Elite
+- tune model format, quantization, thread count, affinity, and thermal behavior
+- patch or extend kernels only when profiling proves a device-specific win
 
 Scope:
 
 - Android NDK C++
-- one model family
-- one tokenizer path
-- one packed format
-- CPU correctness first
-- Vulkan only after CPU correctness and profiling
+- pinned `llama.cpp` revision
+- GGUF model artifacts
+- same JSONL benchmark protocol as the owned runtime
+- CPU first; Vulkan/QNN only after CPU baseline is understood
 
-### Track B: QAIRT/QNN Sidecar
+### Track B: Owned Runtime Kernel Lab
+
+Purpose:
+
+- preserve the working custom runtime as a correctness oracle
+- test isolated kernels and packing layouts without disturbing production inference
+- compare simplified kernels against `llama.cpp` kernels
+- provide tensor-level debugging when `llama.cpp` output or performance is unclear
+
+Allowed work:
+
+- keep tokenizer/model packer/runtime tests green
+- keep Android tensor and decode smoke paths available
+- add microbenchmarks for hot projection shapes
+- prototype Q8/NEON/Vulkan kernels in isolation
+
+Disallowed as mainline work:
+
+- trying to reimplement full `llama.cpp` before evidence says it will win
+- expanding owned runtime architecture support
+- making owned packed format the default product path without beating `llama.cpp`
+
+### Track C: QAIRT/QNN Sidecar
 
 Purpose:
 
 - preserve current Qualcomm work as a baseline and comparison target
 - keep control-model validation alive
-- revisit HTP only after owned runtime benchmarking exists
+- revisit HTP only after the `llama.cpp` Android baseline exists
 
 Allowed work:
 
@@ -115,10 +141,9 @@ Disallowed as mainline work:
 
 ## 3. Non-Goals For This Reset
 
-Out of scope until Milestone 4 or later:
+Out of scope until the `llama.cpp` Android baseline is measured:
 
 - multiple model families
-- GGUF runtime loading
 - ONNX runtime loading
 - QAIRT/HTP as a mainline backend
 - speculative decoding
@@ -126,22 +151,23 @@ Out of scope until Milestone 4 or later:
 - multimodal support
 - tool calling
 - framework-style abstraction for many architectures
-- aggressive quantization before correctness
-- trying to match or beat vendor tooling before the engine is stable
+- owned-runtime feature expansion
+- custom kernels without a profile proving the target hotspot
+- laptop-driven performance decisions
 
 ## 4. Success Definition
 
 Short term:
 
-**A small dense decoder runs end-to-end in the owned Android CPU runtime and produces benchmark records.**
+**`llama.cpp` runs the target model on Android and produces same-protocol benchmark records.**
 
 Medium term:
 
-**The owned CPU runtime is correct, profiled, and benchmarked well enough to guide optimization decisions.**
+**Stock `llama.cpp` is profiled and tuned on Snapdragon 8 Elite well enough to identify exact bottlenecks and optimization candidates.**
 
 Long term:
 
-**The engine owns model format, correctness oracle, decode loop, CPU kernels, benchmark harness, and backend decisions. QAIRT/QNN becomes an optional competitor, not the boss of the roadmap.**
+**The project beats stock `llama.cpp` on the fixed target phone through measured device-specific changes, while retaining a clean benchmark trail and fallback production path.**
 
 ## 5. Repository Layout Target
 
@@ -180,26 +206,33 @@ native/custom/
       q8_matvec.comp
 scripts/
   pack_tinyllama.py
+  benchmark_llama_cpp_android.sh
+  compare_benchmarks.py
+native/third_party/
+  llama.cpp/   # pinned production inference base
 ```
 
 Runtime shape:
 
 ```text
-Android UI -> ViewModel -> NativeBridge -> CustomRuntime
-                                      -> CPU backend first
-                                      -> Vulkan backend later
-                                      -> QNN sidecar later
+Android UI -> ViewModel -> NativeBridge -> llama.cpp runtime
+                                      -> tuned CPU path first
+                                      -> custom kernel hooks later
+                                      -> Vulkan/QNN sidecars later
+
+Owned custom runtime -> oracle, tensor dumps, microbenchmarks, kernel lab
 ```
 
 Important rule:
 
 - `layers.cpp` may be explicit and ugly in v1.
 - Do not over-abstract model execution early.
-- Use a Python packer first; parsing `safetensors` in C++ is not the project. The runtime reads only the owned packed format.
+- Production inference uses GGUF through `llama.cpp`.
+- The owned runtime reads only the owned packed format and should stay focused on oracle/kernel-lab work.
 
-## 6. Mandatory Oracle Path
+## 6. Mandatory Oracle And Lab Path
 
-Before Android becomes the main debug surface, there must be a desktop reference path.
+The owned runtime remains useful as a tensor oracle and isolated kernel lab, even though production inference now uses GGUF through `llama.cpp`.
 
 Required tools:
 
@@ -275,13 +308,13 @@ Explicit non-goals for format v1:
 
 - Q4
 - Q8
-- GGUF direct loading
+- GGUF direct loading inside the owned runtime
 - multiple model families
 - direct mmap optimization
 - paged KV cache
 - GPU-specific packing
 
-Format v1 is for correctness, not maximum speed.
+Format v1 is for correctness and kernel experiments, not production inference or maximum speed.
 
 ## 8. Milestones
 
@@ -309,11 +342,11 @@ Repository note:
 
 This workspace currently may not have `.git` metadata. If git metadata is absent, do not block the reset on branch/tag commands. Record the baseline in `docs/custom_runtime_baseline.md` instead. If git metadata is present, create `custom-runtime-v1` and tag the old state as `pre-custom-runtime-reset`.
 
-### Milestone 1: Correct Forward Pass On Owned Runtime
+### Milestone 1: Correct Forward Pass On Owned Runtime Lab
 
 Goal:
 
-Run `TinyLlama-1.1B-Chat-v1.0` end-to-end in owned C++ on Android CPU.
+Run `TinyLlama-1.1B-Chat-v1.0` end-to-end in owned C++ on Android CPU so it can serve as an oracle and kernel lab.
 
 Scope:
 
@@ -334,7 +367,7 @@ Gates:
 - same prompt gives deterministic first token
 - Android matches desktop oracle within tolerance at selected layer boundaries
 - one short prompt produces readable text
-- no dependency on QAIRT, ONNX, QNN, or GGUF in the runtime path
+- no dependency on QAIRT, ONNX, QNN, or GGUF in the owned-runtime lab path
 
 Explicit non-goals:
 
@@ -348,7 +381,7 @@ Explicit non-goals:
 
 Goal:
 
-Benchmark the owned runtime well enough that backend decisions are factual.
+Benchmark `llama.cpp`, the owned runtime, and future backends with one comparable protocol.
 
 Fixed benchmark protocol:
 
@@ -380,46 +413,81 @@ Every JSONL row must include:
 Gate:
 
 - every benchmark writes one JSONL record
-- records are comparable across future CPU/Vulkan/QNN runs
+- records are comparable across owned CPU, `llama.cpp`, future Vulkan, and QNN runs
 - adb script can trigger a run without manual UI steps
+- `llama.cpp` has at least one Android benchmark record on the same prompt protocol
 
-### Milestone 3: CPU Optimization Pass
+### Milestone 2.5: llama.cpp Production Baseline
 
 Goal:
 
-Make CPU strong enough to serve as a real baseline.
+Establish stock `llama.cpp` as the production baseline before any custom optimization work.
 
-Work order:
+Scope:
 
-1. FP16 correctness path
-2. Q8 packed linear layers
-3. FP16 vs Q8 comparison
-4. thread count tuning
-5. big-core affinity experiments
-6. buffer reuse and allocation cleanup
+- pin the exact `llama.cpp` revision used for comparison
+- document Android build flags, quantization type, thread count, and model artifact
+- run the fixed benchmark protocol on Snapdragon 8 Elite
+- emit JSONL records with backend = `llama_cpp`
+- produce a comparison table: stock `llama.cpp`, owned FP16 CPU, and any existing QNN sidecar records
 
 Rules:
 
-- no Q4 before Q8 is stable
-- no GPU work before top CPU bottlenecks are measured
+- use the same prompt IDs, max tokens, warmup count, measured runs, and median reporting
+- record model/checksum/quantization format so results are not ambiguous
+- tune only against Android numbers on the target phone
+- do not start hardware-specific kernel work until this baseline exists
+- production inference defaults to `llama.cpp` unless an alternative backend beats it with the same protocol
 
 Gate:
 
-- owned CPU runtime has stable decode numbers
+- `llama.cpp` Android decode benchmark exists
+- owned runtime Android decode benchmark exists
+- both records can be compared by one script without manual editing
+
+### Milestone 3: llama.cpp CPU Optimization Pass
+
+Goal:
+
+Push stock `llama.cpp` closer to the Snapdragon 8 Elite limit before writing separate kernels.
+
+Work order:
+
+1. Build and record stock `llama.cpp` Android baseline.
+2. Test quantization formats: FP16, Q8, Q6, Q5, Q4 where available and acceptable.
+3. Sweep thread count and batch/prompt parameters.
+4. Run big-core affinity and thermal stability experiments.
+5. Profile the limiting kernels in stock `llama.cpp`.
+6. Patch or configure `llama.cpp` only where profiling identifies a clear bottleneck.
+7. Compare patched `llama.cpp` vs stock `llama.cpp` with the same JSONL protocol.
+8. Use the owned runtime only to prototype isolated kernels or verify math when useful.
+
+Rules:
+
+- no fork patch survives unless it beats stock `llama.cpp` on Android
+- no GPU work before top CPU bottlenecks are measured
+- no custom kernel work before stock `llama.cpp` profiling identifies the target
+- keep fork changes small enough to rebase
+
+Gate:
+
+- stock and patched `llama.cpp` have stable decode numbers
 - benchmark records are reproducible
 - bottleneck report identifies the top hot kernels
+- comparison report says where patched `llama.cpp` wins, loses, and why
+- any custom kernel idea has attribution and a measured reason to exist
 
 ### Milestone 4: Vulkan Spike
 
 Goal:
 
-Determine whether custom Adreno compute is worth deeper investment.
+Determine whether custom Adreno compute can beat tuned `llama.cpp` CPU for measured hotspots.
 
 Minimum spike:
 
 - Vulkan device/context setup in native code
 - one fused decode-time `matvec` shader
-- compare CPU vs Vulkan for one hot projection shape
+- compare tuned `llama.cpp` CPU vs Vulkan for one hot projection shape
 - measure dispatch overhead separately from kernel time
 - verify output against CPU within tolerance
 
@@ -437,7 +505,7 @@ Two focused weeks maximum. If the spike does not produce a clear signal, return 
 
 Goal:
 
-Accelerate decode without porting the whole model.
+Accelerate `llama.cpp`-based decode without porting the whole model.
 
 Port order:
 
@@ -461,8 +529,8 @@ Turn HTP back into a benchmark question.
 
 Questions:
 
-- Can QAIRT/HTP beat owned CPU on the same model class?
-- Can QAIRT/HTP beat owned Vulkan on the same benchmark protocol?
+- Can QAIRT/HTP beat tuned `llama.cpp` CPU on the same model class?
+- Can QAIRT/HTP beat tuned `llama.cpp` + custom kernels on the same benchmark protocol?
 - Is QNN useful as a selected-op backend or only as a vendor full-graph path?
 
 Rules:
@@ -551,12 +619,12 @@ One short prompt must decode through the owned Android CPU runtime. First-token-
 
 Work is **mainline** only if it advances one of these:
 
-- owned model loading
-- owned inference correctness
-- owned packed format
-- owned benchmark harness
-- measured CPU optimization
-- measured Vulkan viability
+- `llama.cpp` Android production inference
+- same-protocol benchmark records
+- stock vs patched `llama.cpp` comparison
+- measured Snapdragon 8 Elite CPU optimization
+- measured kernel work that improves `llama.cpp` or a selected backend
+- measured Vulkan viability against tuned `llama.cpp`
 
 Work is **sidecar** if it depends on:
 
@@ -565,6 +633,7 @@ Work is **sidecar** if it depends on:
 - QNN converter quirks
 - Genie config compatibility
 - architecture support in vendor tooling
+- owned-runtime expansion without a benchmark or kernel-learning purpose
 
 Sidecar work is allowed only when:
 
@@ -572,20 +641,28 @@ Sidecar work is allowed only when:
 - it answers a bounded comparison question
 - it is timeboxed
 
+Work is **lab-track** when it uses the owned runtime to answer:
+
+- whether an isolated kernel is mathematically correct
+- whether a packing/layout idea is worth porting into `llama.cpp`
+- whether a backend experiment is promising enough to benchmark end-to-end
+
 ## 11. Kill Rules
 
 Pause immediately if:
 
-- a second model family enters discussion before Milestone 3
-- GGUF runtime loading appears before the owned packer is stable
-- Vulkan work starts before desktop-vs-Android tensor comparison exists
-- QAIRT/ONNX/HTP consumes more than one day during Milestones 1-3
+- a second model family enters discussion before stock `llama.cpp` baseline exists
+- owned-runtime work expands beyond oracle/kernel-lab tasks without beating `llama.cpp`
+- Vulkan work starts before tuned `llama.cpp` CPU bottlenecks are measured
+- QAIRT/ONNX/HTP consumes more than one day before the `llama.cpp` baseline exists
+- code is copied across projects without checking license/attribution and measuring the win
 
 Continue immediately if:
 
-- a task reduces uncertainty in model loading
-- a task improves tensor-level correctness confidence
+- a task makes `llama.cpp` faster on the target phone
 - a task improves reproducible benchmark quality
+- a task makes stock and patched `llama.cpp` results directly comparable on Android
+- a task isolates a proven hotspot and produces a measurable device-specific result
 
 ## 12. What To Preserve From The Existing Repo
 
@@ -598,13 +675,32 @@ Keep:
 - adb benchmark worker scripts
 - QAIRT SDK validation scripts
 - docs capturing QNN evidence
+- pinned `llama.cpp` source and Android benchmark runner
+- comparison scripts that read both owned runtime and `llama.cpp` JSONL records
+- owned runtime artifacts that support oracle/kernel-lab work
 
 Rewrite or isolate:
 
-- engine code tightly coupled to `llama.cpp`
+- old app paths that do not expose `llama.cpp` as the production inference engine
 - backend selection logic tied to generic `ggml` assumptions
 - UI controls that imply unsupported backend maturity
 - model-prep paths that require vendor conversion before basic inference
+
+Optimize deliberately:
+
+- `llama.cpp` Android build flags
+- GGUF quantization choice
+- thread count and big-core affinity
+- batch/context/prompt settings
+- hot ARM/NEON kernels
+- cache-friendly row/block packing where profiling proves benefit
+
+Do not optimize blindly:
+
+- owned-runtime reimplementation for its own sake
+- broad architecture support
+- laptop-only speedups
+- changes that improve one prompt but break the fixed benchmark protocol
 
 The app can remain the harness. The engine under it can change aggressively.
 
@@ -622,6 +718,17 @@ The app can remain the harness. The engine under it can change aggressively.
 10. Add Week 1 unit tests.
 11. Do not touch QAIRT/Vulkan until Week 1 gate passes.
 
+## 13.1 Current Next Actions After Week 2
+
+1. Commit the Week 2 Android decode and Week 3 profiler fixes.
+2. Pin the current `llama.cpp` revision under `native/third_party/llama.cpp` or document the existing pinned revision.
+3. Build a minimal Android `llama.cpp` benchmark runner.
+4. Make it emit the same JSONL fields as `run_forward`.
+5. Run the fixed three-prompt protocol on Snapdragon 8 Elite with stock `llama.cpp`.
+6. Sweep quantization, thread count, affinity, and thermal settings.
+7. Write a comparison report: stock `llama.cpp`, tuned `llama.cpp`, owned FP16 CPU, and QNN sidecar where available.
+8. Move custom-kernel work into the owned runtime only when a `llama.cpp` profile identifies the exact hotspot.
+
 ## 14. Final Rule
 
-**The engine owns the roadmap now. Vendor tooling is a comparison target, not the critical path.**
+**The benchmark owns the roadmap now. `llama.cpp` is the production base; custom kernels, Vulkan, and QNN must earn their place by beating it on the target phone.**

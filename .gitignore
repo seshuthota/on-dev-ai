@@ -1,13 +1,16 @@
 .gradle/
 .kotlin/
 build/
+native/build*/
 app/android/app/build/
 app/android/app/.cxx/
 .artifacts/
 output/
+files/benchmarks/*.jsonl
 .conda-qairt310/
 v2.45.0.260326/
 scripts/__pycache__/
+scripts/custom_runtime/debug_*.py
 *.pyc
 local.properties
 .claude/
