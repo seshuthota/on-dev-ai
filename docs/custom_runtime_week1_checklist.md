@@ -52,15 +52,15 @@ This checklist is the first execution slice from `RESET_PLAN_V2.md`.
 - [x] Implement RoPE reference kernel.
 - [x] Implement FP16 matvec reference kernel.
 - [x] Add deterministic tests.
-- [ ] Compare at least one layer operation against a known reference.
+- [x] Compare at least one layer operation against a known reference.
 
 ## Week 1 Gate
 
 Week 1 is complete only when:
 
 - [x] packed file loads
-- [ ] desktop reference runs selected layer operations
-- [ ] one layer operation matches expected output
+- [x] desktop reference runs selected layer operations
+- [x] one layer operation matches expected output
 
 ## Hard Stops
 

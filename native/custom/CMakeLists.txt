@@ -12,6 +12,7 @@ add_library(
     STATIC
     src/runtime.cpp
     src/packed_model_reader.cpp
+    src/packed_tensor_reader.cpp
     src/reference_kernels.cpp
 )
 
@@ -41,6 +42,17 @@ add_executable(
 
 target_link_libraries(
     run_reference
+    PRIVATE
+    ondevai_custom_runtime
+)
+
+add_executable(
+    run_layer0_rmsnorm
+    tools/run_layer0_rmsnorm.cpp
+)
+
+target_link_libraries(
+    run_layer0_rmsnorm
     PRIVATE
     ondevai_custom_runtime
 )
