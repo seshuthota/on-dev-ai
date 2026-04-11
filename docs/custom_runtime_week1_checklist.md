@@ -39,12 +39,12 @@ This checklist is the first execution slice from `RESET_PLAN_V2.md`.
 
 ## Day 4: Desktop Reference Loader
 
-- [ ] Add `run_reference`.
-- [ ] Load `model.bin`.
-- [ ] Validate header fields.
-- [ ] Validate tensor directory offsets.
-- [ ] Look up tensors by name.
-- [ ] Print metadata summary.
+- [x] Add `run_reference`.
+- [x] Load `model.bin`.
+- [x] Validate header fields.
+- [x] Validate tensor directory offsets.
+- [x] Look up tensors by name.
+- [x] Print metadata summary.
 
 ## Day 5: First Kernels
 
@@ -58,7 +58,7 @@ This checklist is the first execution slice from `RESET_PLAN_V2.md`.
 
 Week 1 is complete only when:
 
-- [ ] packed file loads
+- [x] packed file loads
 - [ ] desktop reference runs selected layer operations
 - [ ] one layer operation matches expected output
 

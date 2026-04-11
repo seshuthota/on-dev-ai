@@ -13,3 +13,4 @@ local.properties
 .claude/
 .factory/
 .vscode/
+.opencode-delegate/

@@ -64,7 +64,9 @@ Writing `model.bin` requires `torch`, `numpy`, and `safetensors`. Use the extern
 
 ## Header v1
 
-Required fields:
+The v1 header is 80 bytes and matches Python `struct.Struct("<4sIIIIIIIIIIIffQQQ")`.
+
+Required fields in order:
 
 - `magic`: `ODAI`
 - `version`: `1`
@@ -77,11 +79,12 @@ Required fields:
 - `vocab_size`
 - `max_position_embeddings`
 - `runtime_context_cap`
+- `tensor_count`
 - `rope_theta`
 - `rms_norm_eps`
-- `tensor_count`
 - `tensor_directory_offset`
 - `tensor_data_offset`
+- `file_size`
 
 Keep this header simple. Add fields only when the runtime needs them.
 
