@@ -77,7 +77,8 @@ void KvCache::append(std::uint32_t layer_idx, std::span<const float> k_slice, st
     auto v_span = get_v(layer_idx, static_cast<std::uint32_t>(token_count_));
     std::copy(k_slice.begin(), k_slice.end(), k_span.begin());
     std::copy(v_slice.begin(), v_slice.end(), v_span.begin());
-    ++token_count_;
+    // NOTE: token_count_ is incremented by Runtime::forward once per decode step,
+    // not here, to avoid per-layer double counting.
 }
 
 std::span<const float> KvCache::get_k_range(std::uint32_t layer_idx, std::size_t start_pos, std::size_t end_pos) const {

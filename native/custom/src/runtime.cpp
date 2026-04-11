@@ -75,6 +75,17 @@ const Model* Runtime::model() const {
     return model_.get();
 }
 
+RuntimeStatus Runtime::load_model(std::unique_ptr<Model> model) {
+    if (model == nullptr) {
+        return {false, "model is null"};
+    }
+    if (model->config().model_family != "tinyllama_v1") {
+        return {false, "unsupported model family: " + model->config().model_family};
+    }
+    model_ = std::move(model);
+    return {true, "custom runtime model loaded"};
+}
+
 RuntimeStatus Runtime::load_model(std::unique_ptr<Model> model, const std::string& model_bin_path) {
     if (model == nullptr) {
         return {false, "model is null"};
@@ -214,6 +225,9 @@ std::uint32_t Runtime::forward(std::uint32_t token_id, std::uint32_t position) {
         std::copy(hidden_states_.begin(), hidden_states_.end(), residual_.begin());
     }
 
+    // Increment KV cache token count: all layers have appended their K/V
+    kv_cache_.set_token_count(kv_cache_.token_count() + 1);
+
     // Step 3: Final RMSNorm
     std::vector<float> final_norm_fp32(hidden_size);
     for (std::uint32_t i = 0; i < hidden_size; ++i) {
@@ -276,13 +290,14 @@ void Runtime::compute_layer(std::uint32_t layer_idx,
     // O projection
     matvec_fp16_reference(span_w(4), hidden_size, hidden_size, attn_scratch_, output);
 
-    // Residual 1
+    // Residual 1: post_attn_out = input + attn_out
+    // Save in residual_ (member buffer) to preserve for final residual after MLP
     for (std::uint32_t i = 0; i < hidden_size; ++i) {
-        output[i] = input[i] + output[i];
+        residual_[i] = input[i] + output[i];
     }
 
-    // Second RMSNorm
-    rmsnorm_reference(output, post_attn_ln_fp32, rms_norm_eps, norm_scratch_);
+    // Second RMSNorm (on post-attention residual)
+    rmsnorm_reference(residual_, post_attn_ln_fp32, rms_norm_eps, norm_scratch_);
 
     // MLP gate/up projections (FP16 matvec into scratch buffer)
     float* gate_ptr = mlp_scratch_.data();
@@ -297,13 +312,13 @@ void Runtime::compute_layer(std::uint32_t layer_idx,
         gate_ptr[i] = silu(gate_ptr[i]) * up_ptr[i];
     }
 
-    // MLP down projection
+    // MLP down projection (into output, overwriting it)
     matvec_fp16_reference(span_w(8), hidden_size, intermediate_size,
                           std::span<float>(gate_ptr, intermediate_size), output);
 
-    // Residual 2
+    // Residual 2: output = post_attn_out + mlp_out
     for (std::uint32_t i = 0; i < hidden_size; ++i) {
-        output[i] = input[i] + output[i];
+        output[i] = residual_[i] + output[i];
     }
 }
 
@@ -317,12 +332,14 @@ void Runtime::compute_attention(std::uint32_t layer_idx,
     const std::uint32_t num_heads = config.attention_head_count;
     const std::uint32_t kv_heads = config.kv_head_count;
     const std::uint32_t head_dim = config.hidden_size / num_heads;
-    const std::size_t seq_len = kv_cache_.token_count();
 
-    // Append current K/V to cache
+    // Append current K/V to cache at current position
     kv_cache_.append(layer_idx, k, v);
 
-    // Get cached K/V for all positions up to current (inclusive)
+    // seq_len is now position+1 (all tokens including current)
+    const std::size_t seq_len = kv_cache_.token_count();
+
+    // Get cached K/V for all positions 0..seq_len-1
     auto k_range = kv_cache_.get_k_range(layer_idx, 0, seq_len);
     auto v_range = kv_cache_.get_v_range(layer_idx, 0, seq_len);
 

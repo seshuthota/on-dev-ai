@@ -32,6 +32,7 @@ public:
     [[nodiscard]] const RuntimeOptions& options() const;
     [[nodiscard]] const Model* model() const;
 
+    RuntimeStatus load_model(std::unique_ptr<Model> model);
     RuntimeStatus load_model(std::unique_ptr<Model> model, const std::string& model_bin_path);
     RuntimeStatus reset();
 
