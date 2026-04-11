@@ -125,6 +125,12 @@ if [[ ! -f "${INSTALL_DIR}/bin/llama-bench" ]]; then
   exit 1
 fi
 
+if [[ ! -f "${INSTALL_DIR}/bin/llama-completion" ]]; then
+  echo "Error: llama-completion not found after install: ${INSTALL_DIR}/bin/llama-completion" >&2
+  exit 1
+fi
+
 echo "[info] Build complete. Install directory: ${INSTALL_DIR}"
 echo "[info] llama-cli: ${INSTALL_DIR}/bin/llama-cli"
 echo "[info] llama-bench: ${INSTALL_DIR}/bin/llama-bench"
+echo "[info] llama-completion: ${INSTALL_DIR}/bin/llama-completion"

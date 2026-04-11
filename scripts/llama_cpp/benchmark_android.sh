@@ -18,6 +18,7 @@ CTX=512
 MAX_NEW_TOKENS=64
 INSTALL_DIR="${REPO_ROOT}/.artifacts/llama-cpp/android-install"
 OUTPUT_JSONL="${REPO_ROOT}/files/benchmarks/llama_cpp_android.jsonl"
+REUSE_DEVICE_ARTIFACTS=false
 
 usage() {
   cat <<'EOF'
@@ -40,6 +41,7 @@ Options:
   --max-new-tokens N    Max new tokens to generate (default: 64)
   --install-dir PATH    Install directory (default: .artifacts/llama-cpp/android-install)
   --output-jsonl PATH   Output JSONL file (default: files/benchmarks/llama_cpp_android.jsonl)
+  --reuse-device-artifacts  Skip device cleanup and push; verify install/bin/llama-completion and model.gguf exist on device
   -h, --help            Show this help message
 
 CPU Mask:
@@ -106,6 +108,10 @@ while [[ $# -gt 0 ]]; do
       OUTPUT_JSONL="$2"
       shift 2
       ;;
+    --reuse-device-artifacts)
+      REUSE_DEVICE_ARTIFACTS=true
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -141,8 +147,8 @@ if [[ ! -f "${MODEL}" ]]; then
   exit 1
 fi
 
-if [[ ! -f "${INSTALL_DIR}/bin/llama-cli" ]]; then
-  echo "Error: llama-cli not found in install directory: ${INSTALL_DIR}/bin/llama-cli" >&2
+if [[ ! -f "${INSTALL_DIR}/bin/llama-completion" ]]; then
+  echo "Error: llama-completion not found in install directory: ${INSTALL_DIR}/bin/llama-completion" >&2
   echo "Did you run build_android.sh first?" >&2
   exit 1
 fi
@@ -176,13 +182,22 @@ echo "[info] Ctx: ${CTX}, max-new-tokens: ${MAX_NEW_TOKENS}"
 echo "[info] Run dir: ${RUN_DIR}"
 echo "[info] Output: ${OUTPUT_JSONL}"
 
-adb -s "${SERIAL}" shell "rm -rf '${TARGET_DIR}' && mkdir -p '${TARGET_DIR}'" >/dev/null
+if [[ "${REUSE_DEVICE_ARTIFACTS}" == "true" ]]; then
+  echo "[info] Reusing device artifacts, verifying on-device files..."
+  if ! adb -s "${SERIAL}" shell "test -f '${TARGET_DIR}/install/bin/llama-completion' && test -f '${TARGET_DIR}/model.gguf'" 2>/dev/null; then
+    echo "Error: Device artifacts missing. Run without --reuse-device-artifacts first." >&2
+    exit 1
+  fi
+  echo "[info] Device artifacts verified."
+else
+  adb -s "${SERIAL}" shell "rm -rf '${TARGET_DIR}' && mkdir -p '${TARGET_DIR}'" >/dev/null
 
-echo "[info] Pushing install directory to device..."
-adb -s "${SERIAL}" push "${INSTALL_DIR}" "${TARGET_DIR}/install" >/dev/null
+  echo "[info] Pushing install directory to device..."
+  adb -s "${SERIAL}" push "${INSTALL_DIR}" "${TARGET_DIR}/install" >/dev/null
 
-echo "[info] Pushing model to device..."
-adb -s "${SERIAL}" push "${MODEL}" "${TARGET_DIR}/model.gguf" >/dev/null
+  echo "[info] Pushing model to device..."
+  adb -s "${SERIAL}" push "${MODEL}" "${TARGET_DIR}/model.gguf" >/dev/null
+fi
 
 MODEL_CHECKSUM="$(sha256sum "${MODEL}" | awk '{print $1}')"
 
@@ -247,7 +262,7 @@ else
   cpu_strict="1"
 fi
 
-LLAMA_CLI="./bin/llama-cli"
+LLAMA_CLI="./bin/llama-completion"
 MODEL_PATH="${TARGET_DIR}/model.gguf"
 
 NORMALIZE_SCRIPT="${SCRIPT_DIR}/normalize_llama_cli.py"
@@ -296,7 +311,11 @@ while IFS= read -r line || [[ -n "$line" ]]; do
            --seed 0 \
            --temp 0 \
            -C '${CPU_MASK_RESOLVED}' \
-           --cpu-strict 1" \
+           --cpu-strict 1 \
+           --no-display-prompt \
+           --no-warmup \
+           --perf \
+           -no-cnv" \
         < /dev/null > "${log_file}" 2>&1
     else
       adb -s "${SERIAL}" shell \
@@ -308,7 +327,11 @@ while IFS= read -r line || [[ -n "$line" ]]; do
            -t '${THREADS}' \
            -f '${device_prompt_file}' \
            --seed 0 \
-           --temp 0" \
+           --temp 0 \
+           --no-display-prompt \
+           --no-warmup \
+           --perf \
+           -no-cnv" \
         < /dev/null > "${log_file}" 2>&1
     fi
     run_rc=$?
@@ -335,7 +358,11 @@ while IFS= read -r line || [[ -n "$line" ]]; do
            --seed 0 \
            --temp 0 \
            -C '${CPU_MASK_RESOLVED}' \
-           --cpu-strict 1" \
+           --cpu-strict 1 \
+           --no-display-prompt \
+           --no-warmup \
+           --perf \
+           -no-cnv" \
         < /dev/null > "${log_file}" 2>&1
     else
       adb -s "${SERIAL}" shell \
@@ -347,7 +374,11 @@ while IFS= read -r line || [[ -n "$line" ]]; do
            -t '${THREADS}' \
            -f '${device_prompt_file}' \
            --seed 0 \
-           --temp 0" \
+           --temp 0 \
+           --no-display-prompt \
+           --no-warmup \
+           --perf \
+           -no-cnv" \
         < /dev/null > "${log_file}" 2>&1
     fi
     run_rc=$?
