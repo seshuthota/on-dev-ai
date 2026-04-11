@@ -201,6 +201,10 @@ std::size_t Runtime::kv_cache_token_count() const {
     return kv_cache_.token_count();
 }
 
+std::span<const float> Runtime::get_logits() const {
+    return logits_;
+}
+
 std::uint32_t Runtime::forward(std::uint32_t token_id, std::uint32_t position) {
     const auto& config = model_->config();
     const std::uint32_t hidden_size = config.hidden_size;

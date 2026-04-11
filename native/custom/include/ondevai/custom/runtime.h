@@ -46,6 +46,9 @@ public:
     // Get current token count in KV cache
     [[nodiscard]] std::size_t kv_cache_token_count() const;
 
+    // Access logits from last forward() call (for benchmarking)
+    [[nodiscard]] std::span<const float> get_logits() const;
+
 private:
     void compute_layer(std::uint32_t layer_idx,
                       std::span<const float> input,
