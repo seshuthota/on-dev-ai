@@ -26,4 +26,18 @@ namespace ondevai::custom {
     std::span<const float> input,
     std::span<float> output);
 
+[[nodiscard]] bool softmax_reference(std::span<float> scores);
+
+[[nodiscard]] bool softmax_2d_reference(std::span<float> scores, std::uint32_t rows, std::uint32_t cols);
+
+[[nodiscard]] bool attention_gqa_reference(
+    std::span<const float> q,
+    std::span<const float> kv_cache_k,
+    std::span<const float> kv_cache_v,
+    std::uint32_t seq_len,
+    std::uint32_t num_q_heads,
+    std::uint32_t num_kv_heads,
+    std::uint32_t head_dim,
+    std::span<float> output);
+
 }  // namespace ondevai::custom

@@ -11,6 +11,7 @@ add_library(
     ondevai_custom_runtime
     STATIC
     src/runtime.cpp
+    src/kv_cache.cpp
     src/packed_model_reader.cpp
     src/packed_tensor_reader.cpp
     src/reference_kernels.cpp
@@ -120,6 +121,17 @@ add_executable(
 
 target_link_libraries(
     dump_android_tensors
+    PRIVATE
+    ondevai_custom_runtime
+)
+
+add_executable(
+    run_forward
+    tools/run_forward.cpp
+)
+
+target_link_libraries(
+    run_forward
     PRIVATE
     ondevai_custom_runtime
 )

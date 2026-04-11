@@ -101,24 +101,26 @@ bool expected_tensor_byte_size(const DType dtype, const std::vector<std::uint32_
     return true;
 }
 
-std::vector<std::string> required_tensors() {
+std::vector<std::string> required_tensors(std::uint32_t num_layers) {
     std::vector<std::string> names = {
         "model.embed_tokens.weight",
         "lm_head.weight",
         "model.norm.weight",
     };
-    const std::string prefix = "model.layers.0";
-    names.insert(names.end(), {
-        prefix + ".input_layernorm.weight",
-        prefix + ".self_attn.q_proj.weight",
-        prefix + ".self_attn.k_proj.weight",
-        prefix + ".self_attn.v_proj.weight",
-        prefix + ".self_attn.o_proj.weight",
-        prefix + ".post_attention_layernorm.weight",
-        prefix + ".mlp.gate_proj.weight",
-        prefix + ".mlp.up_proj.weight",
-        prefix + ".mlp.down_proj.weight",
-    });
+    for (std::uint32_t layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
+        const std::string prefix = "model.layers." + std::to_string(layer_idx);
+        names.insert(names.end(), {
+            prefix + ".input_layernorm.weight",
+            prefix + ".self_attn.q_proj.weight",
+            prefix + ".self_attn.k_proj.weight",
+            prefix + ".self_attn.v_proj.weight",
+            prefix + ".self_attn.o_proj.weight",
+            prefix + ".post_attention_layernorm.weight",
+            prefix + ".mlp.gate_proj.weight",
+            prefix + ".mlp.up_proj.weight",
+            prefix + ".mlp.down_proj.weight",
+        });
+    }
     return names;
 }
 
@@ -128,7 +130,8 @@ bool validate_tensor_shapes(
     std::uint32_t intermediate_size,
     std::uint32_t vocab_size,
     std::uint32_t attention_head_count,
-    std::uint32_t kv_head_count
+    std::uint32_t kv_head_count,
+    std::uint32_t num_layers
 ) {
     if (hidden_size == 0 || attention_head_count == 0 || hidden_size % attention_head_count != 0) {
         return false;
@@ -157,15 +160,19 @@ bool validate_tensor_shapes(
     if (!check_shape_2d("model.embed_tokens.weight", vocab_size, hidden_size)) return false;
     if (!check_shape_2d("lm_head.weight", vocab_size, hidden_size)) return false;
     if (!check_shape_1d("model.norm.weight", hidden_size)) return false;
-    if (!check_shape_1d("model.layers.0.input_layernorm.weight", hidden_size)) return false;
-    if (!check_shape_1d("model.layers.0.post_attention_layernorm.weight", hidden_size)) return false;
-    if (!check_shape_2d("model.layers.0.self_attn.q_proj.weight", hidden_size, hidden_size)) return false;
-    if (!check_shape_2d("model.layers.0.self_attn.o_proj.weight", hidden_size, hidden_size)) return false;
-    if (!check_shape_2d("model.layers.0.self_attn.k_proj.weight", kv_head_count * head_dim, hidden_size)) return false;
-    if (!check_shape_2d("model.layers.0.self_attn.v_proj.weight", kv_head_count * head_dim, hidden_size)) return false;
-    if (!check_shape_2d("model.layers.0.mlp.gate_proj.weight", intermediate_size, hidden_size)) return false;
-    if (!check_shape_2d("model.layers.0.mlp.up_proj.weight", intermediate_size, hidden_size)) return false;
-    if (!check_shape_2d("model.layers.0.mlp.down_proj.weight", hidden_size, intermediate_size)) return false;
+
+    for (std::uint32_t layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
+        const std::string prefix = "model.layers." + std::to_string(layer_idx);
+        if (!check_shape_1d(prefix + ".input_layernorm.weight", hidden_size)) return false;
+        if (!check_shape_1d(prefix + ".post_attention_layernorm.weight", hidden_size)) return false;
+        if (!check_shape_2d(prefix + ".self_attn.q_proj.weight", hidden_size, hidden_size)) return false;
+        if (!check_shape_2d(prefix + ".self_attn.o_proj.weight", hidden_size, hidden_size)) return false;
+        if (!check_shape_2d(prefix + ".self_attn.k_proj.weight", kv_head_count * head_dim, hidden_size)) return false;
+        if (!check_shape_2d(prefix + ".self_attn.v_proj.weight", kv_head_count * head_dim, hidden_size)) return false;
+        if (!check_shape_2d(prefix + ".mlp.gate_proj.weight", intermediate_size, hidden_size)) return false;
+        if (!check_shape_2d(prefix + ".mlp.up_proj.weight", intermediate_size, hidden_size)) return false;
+        if (!check_shape_2d(prefix + ".mlp.down_proj.weight", hidden_size, intermediate_size)) return false;
+    }
 
     return true;
 }
@@ -392,7 +399,7 @@ PackedModelLoadResult load_packed_model_metadata(const std::filesystem::path& mo
         }
     }
 
-    const auto required = required_tensors();
+    const auto required = required_tensors(header.num_hidden_layers);
     for (const auto& req : required) {
         if (std::none_of(tensors.begin(), tensors.end(), [&req](const TensorInfo& t) { return t.name == req; })) {
             result.error = "missing required tensor: " + req;
@@ -406,7 +413,8 @@ PackedModelLoadResult load_packed_model_metadata(const std::filesystem::path& mo
             header.intermediate_size,
             header.vocab_size,
             header.num_attention_heads,
-            header.num_key_value_heads)) {
+            header.num_key_value_heads,
+            header.num_hidden_layers)) {
         result.error = "tensor shape validation failed for layer 0 tensors";
         return result;
     }
