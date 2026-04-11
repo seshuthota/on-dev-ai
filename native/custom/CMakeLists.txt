@@ -112,3 +112,14 @@ target_link_libraries(
     PRIVATE
     ondevai_custom_runtime
 )
+
+add_executable(
+    dump_android_tensors
+    tools/dump_android_tensors.cpp
+)
+
+target_link_libraries(
+    dump_android_tensors
+    PRIVATE
+    ondevai_custom_runtime
+)
