@@ -48,6 +48,33 @@ List of devices attached
 
 Interpretation: no adb device was connected for this baseline capture. CPU benchmark and QNN smoke results were not rerun on-device in this pass.
 
+Updated device check on 2026-04-11:
+
+```text
+adb connect 192.168.29.11:38191
+connected to 192.168.29.11:38191
+```
+
+Device facts:
+
+```text
+serial=192.168.29.11:38191
+model=I2401
+board=sun
+soc=SM8750
+android_release=16
+sdk=36
+```
+
+Sidecar SDK/device validator:
+
+```text
+scripts/sidecar_qnn/check_qnn_sdk.sh --adb-serial 192.168.29.11:38191
+setup check passed with 6 warning(s)
+```
+
+Warnings were limited to missing `clang++`/`ndk-build` in `PATH`, known optional `qnn-platform-validator` packaging, and some inaccessible device DSP search paths. The validator still found the connected adb device and the external QAIRT SDK.
+
 ## Model Baseline
 
 Chosen model:
