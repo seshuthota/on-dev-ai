@@ -14,6 +14,8 @@ struct PackedModelLoadResult {
     std::string error;
     std::unique_ptr<Model> model;
     std::uint64_t file_size = 0;
+    std::string source_weight_sha256;
+    std::string packed_model_sha256;
 };
 
 [[nodiscard]] PackedModelLoadResult load_packed_model_metadata(const std::filesystem::path& model_bin_path);

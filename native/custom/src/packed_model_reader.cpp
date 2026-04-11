@@ -1,6 +1,7 @@
 #include "ondevai/custom/packed_model_reader.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -23,6 +24,7 @@ constexpr std::string_view kExpectedModelId = "TinyLlama-1.1B-Chat-v1.0";
 constexpr std::size_t kHeaderSize = 80;
 constexpr std::size_t kMaxRank = 8;
 constexpr std::uint64_t kDirectoryEntryFixedBytes = 20;
+constexpr std::size_t kChecksumBytes = 64;  // SHA-256 hex = 64 chars
 
 struct FileHeader {
     char magic[4];
@@ -232,6 +234,26 @@ PackedModelLoadResult load_packed_model_metadata(const std::filesystem::path& mo
         }
         return result;
     }
+
+    // Read embedded checksums from header extension
+    std::array<char, kChecksumBytes> src_sha = {};
+    std::array<char, kChecksumBytes> pkg_sha = {};
+    if (!file.read(src_sha.data(), kChecksumBytes)) {
+        result.error = "failed to read source_weight_sha256";
+        return result;
+    }
+    if (!file.read(pkg_sha.data(), kChecksumBytes)) {
+        result.error = "failed to read packed_model_sha256";
+        return result;
+    }
+    // Trim null padding from checksums
+    auto trim_checksum = [](const std::array<char, kChecksumBytes>& arr) -> std::string {
+        std::string s(arr.data(), arr.size());
+        auto pos = s.find('\0');
+        return pos == std::string::npos ? s : s.substr(0, pos);
+    };
+    result.source_weight_sha256 = trim_checksum(src_sha);
+    result.packed_model_sha256 = trim_checksum(pkg_sha);
 
     if (header.num_attention_heads == 0 || header.hidden_size == 0 || header.hidden_size % header.num_attention_heads != 0) {
         result.error = "invalid attention head configuration: hidden_size=" + std::to_string(header.hidden_size) + " num_attention_heads=" + std::to_string(header.num_attention_heads);

@@ -15,8 +15,20 @@
 
 namespace {
 
+// Fixed prompt IDs per benchmark protocol (custom_runtime_benchmark_protocol.md)
+constexpr std::array<const char*, 3> kValidPromptIds = {{
+    "short_fact",
+    "reasoning_small",
+    "chat_medium",
+}};
+
+bool is_valid_prompt_id(const std::string& id) {
+    return std::any_of(kValidPromptIds.begin(), kValidPromptIds.end(),
+                       [&id](const char* valid) { return id == valid; });
+}
+
 std::string get_git_commit() {
-    FILE* fp = popen("git -C /home/curious/Documents/hermes-projects/OnDevAI rev-parse HEAD", "r");
+    FILE* fp = popen("git -C /home/curious/Documents/hermes-projects/OnDevAI rev-parse HEAD 2>/dev/null", "r");
     if (!fp) return "unknown";
     char buf[128] = {0};
     if (fgets(buf, sizeof(buf), fp)) {
@@ -37,41 +49,6 @@ std::string get_timestamp_utc() {
     return ss.str();
 }
 
-std::string read_manifest_field(const std::string& path, const std::string& field) {
-    std::ifstream f(path);
-    if (!f) return "";
-    std::string content((std::istreambuf_iterator<char>(f)),
-                         std::istreambuf_iterator<char>());
-    // Simple JSON field extraction
-    std::string search = "\"" + field + "\"";
-    size_t pos = content.find(search);
-    if (pos == std::string::npos) return "";
-    pos = content.find(':', pos);
-    if (pos == std::string::npos) return "";
-    ++pos;
-    while (pos < content.size() && (content[pos] == ' ' || content[pos] == '"')) ++pos;
-    size_t end = pos;
-    while (end < content.size() && content[end] != ',' && content[end] != '"' && content[end] != '\n') ++end;
-    return content.substr(pos, end - pos);
-}
-
-std::string manifest_dir_from_model_path(const std::string& model_bin_path) {
-    size_t last_slash = model_bin_path.rfind('/');
-    if (last_slash == std::string::npos) return "";
-    std::string dir = model_bin_path.substr(0, last_slash);
-    // Check for manifest at dir/manifest.json
-    std::string manifest = dir + "/manifest.json";
-    std::ifstream f(manifest);
-    if (f) return dir;
-    // Also check dir/../manifest.json
-    size_t parent_slash = dir.rfind('/');
-    if (parent_slash == std::string::npos) return "";
-    manifest = dir.substr(0, parent_slash) + "/manifest.json";
-    f.open(manifest);
-    if (f) return dir.substr(0, parent_slash);
-    return "";
-}
-
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -79,6 +56,8 @@ int main(int argc, char* argv[]) {
     std::string vocab_bin_path;
     std::string prompt = "Hello";
     std::string output_jsonl_path;
+    std::string prompt_id = "short_fact";
+    std::string build_id = "unknown";
     std::uint32_t max_new_tokens = 32;
 
     for (int i = 1; i < argc; ++i) {
@@ -93,15 +72,31 @@ int main(int argc, char* argv[]) {
             max_new_tokens = static_cast<std::uint32_t>(std::atoi(argv[++i]));
         } else if (arg == "--output-jsonl" && i + 1 < argc) {
             output_jsonl_path = argv[++i];
+        } else if (arg == "--prompt-id" && i + 1 < argc) {
+            prompt_id = argv[++i];
+        } else if (arg == "--build-id" && i + 1 < argc) {
+            build_id = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
             std::cerr << "Usage: " << argv[0] << " --model-bin PATH --vocab-bin PATH [OPTIONS]\n";
             std::cerr << "  --model-bin PATH   Path to model.bin (required)\n";
             std::cerr << "  --vocab-bin PATH  Path to vocab.bin (required)\n";
-            std::cerr << "  --prompt TEXT     Prompt to process (default: Hello)\n";
+            std::cerr << "  --prompt TEXT    Prompt to process (default: Hello)\n";
             std::cerr << "  --max-tokens N    Max new tokens to generate (default: 32)\n";
+            std::cerr << "  --prompt-id ID    Prompt ID: short_fact, reasoning_small, chat_medium (default: short_fact)\n";
+            std::cerr << "  --build-id ID     Build identifier for device runs (default: unknown)\n";
             std::cerr << "  --output-jsonl PATH  Write JSONL benchmark record here\n";
             return 0;
         }
+    }
+
+    if (!is_valid_prompt_id(prompt_id)) {
+        std::cerr << "error: --prompt-id must be one of: ";
+        for (std::size_t i = 0; i < kValidPromptIds.size(); ++i) {
+            if (i > 0) std::cerr << ", ";
+            std::cerr << kValidPromptIds[i];
+        }
+        std::cerr << "\n";
+        return 1;
     }
 
     if (model_bin_path.empty()) {
@@ -170,8 +165,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "  pos=" << pos << " token=" << tokens[pos] << " -> next=" << current_token << "\n";
     }
     generated.push_back(current_token);
-
-    auto ttft_start = std::chrono::steady_clock::now();
+    auto ttft_elapsed = std::chrono::steady_clock::now() - generation_start;
+    auto decode_start = std::chrono::steady_clock::now();
     std::cerr << "\n=== DECODE LOOP ===\n";
 
     // Decode loop
@@ -188,14 +183,14 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    auto decode_elapsed = std::chrono::steady_clock::now() - decode_start;
     auto total_elapsed = std::chrono::steady_clock::now() - generation_start;
-    auto ttft_elapsed = std::chrono::steady_clock::now() - ttft_start;
     auto total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(total_elapsed).count();
     auto ttft_ms = std::chrono::duration_cast<std::chrono::milliseconds>(ttft_elapsed).count();
+    auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(decode_elapsed).count();
 
     const std::size_t decode_token_count = generated.size() - 1;  // exclude first prefill token
-    const double decode_ms = static_cast<double>(total_ms - ttft_ms);
-    const double decode_tok_per_sec = decode_ms > 0 ? (decode_token_count * 1000.0) / decode_ms : 0.0;
+    const double decode_tok_per_sec = decode_ms > 0 ? (decode_token_count * 1000.0) / static_cast<double>(decode_ms) : 0.0;
     const double prefill_tok_per_sec = ttft_ms > 0 ? (prompt_len * 1000.0) / ttft_ms : 0.0;
 
     std::cerr << "\n=== RESULTS ===\n";
@@ -225,28 +220,20 @@ int main(int argc, char* argv[]) {
 
     // Write JSONL record
     if (!output_jsonl_path.empty()) {
-        std::string manifest_dir = manifest_dir_from_model_path(model_bin_path);
-        std::string model_checksum = "";
-        std::string packed_checksum = "";
-        if (!manifest_dir.empty()) {
-            std::string manifest_path = manifest_dir + "/manifest.json";
-            model_checksum = read_manifest_field(manifest_path, "source_weight_sha256");
-            packed_checksum = read_manifest_field(manifest_path, "packed_model_sha256");
-        }
-
         std::ofstream jsonl(output_jsonl_path, std::ios::app);
         jsonl << "{"
               << "\"schema_version\":1,"
-              << "\"baseline_id\":\"tinyllama-v1-full-desktop\","
+              << "\"baseline_id\":\"" << (build_id == "unknown" ? "tinyllama-v1-full-desktop" : build_id) << "\","
               << "\"git_commit\":\"" << get_git_commit() << "\","
+              << "\"build_id\":\"" << build_id << "\","
               << "\"timestamp_utc\":\"" << get_timestamp_utc() << "\","
               << "\"device_serial\":null,"
               << "\"device_model\":null,"
               << "\"backend\":\"custom_cpu\","
               << "\"model_id\":\"TinyLlama-1.1B-Chat-v1.0\","
-              << "\"model_checksum\":\"" << model_checksum << "\","
-              << "\"packed_checksum\":\"" << packed_checksum << "\","
-              << "\"prompt_id\":\"short_fact\","
+              << "\"model_checksum\":\"" << model_result.source_weight_sha256 << "\","
+              << "\"packed_checksum\":\"" << model_result.packed_model_sha256 << "\","
+              << "\"prompt_id\":\"" << prompt_id << "\","
               << "\"seed\":0,"
               << "\"context_length_cap\":512,"
               << "\"prompt_tokens\":" << prompt_len << ","
