@@ -14,6 +14,7 @@ CPU_MASK="auto-big"
 RUNS=3
 CTX=512
 MAX_NEW_TOKENS=64
+ENABLE_PROFILE=0
 INSTALL_DIR="${REPO_ROOT}/.artifacts/llama-cpp/android-install"
 OUTPUT_JSONL="${REPO_ROOT}/files/benchmarks/llama_cpp_android.jsonl"
 BENCHMARK_SCRIPT="${SCRIPT_DIR}/bench_android.py"
@@ -38,6 +39,7 @@ Options:
   --max-new-tokens N    Max new tokens to generate (default: 64)
   --install-dir PATH    Install directory (default: .artifacts/llama-cpp/android-install)
   --output-jsonl PATH   Output JSONL file (default: files/benchmarks/llama_cpp_android.jsonl)
+  --profile             Enable GGML profiler (default: disabled)
   -h, --help           Show this help message
 
 Examples:
@@ -96,6 +98,10 @@ while [[ $# -gt 0 ]]; do
       OUTPUT_JSONL="$2"
       shift 2
       ;;
+    --profile)
+      ENABLE_PROFILE=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -144,6 +150,8 @@ RUN_TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 RUN_DIR="${LLAMA_CPP_RUNS_DIR}/${RUN_TIMESTAMP}"
 mkdir -p "${RUN_DIR}"
 
+adb -s "${SERIAL}" shell "mkdir -p '${TARGET_DIR}'"
+
 MODEL_CHECKSUM="$(sha256sum "${MODEL}" | awk '{print $1}')"
 
 echo "[info] Device: ${DEVICE_MODEL} (${SERIAL})"
@@ -160,19 +168,79 @@ echo "[info] Run dir: ${RUN_DIR}"
 DEVICE_CHECKSUM_FILE="${TARGET_DIR}/model.sha256"
 DEVICE_MODEL_FILE="${TARGET_DIR}/model.gguf"
 
-if [[ -f "${DEVICE_CHECKSUM_FILE}" ]]; then
+if adb -s "${SERIAL}" shell "test -f '${DEVICE_CHECKSUM_FILE}'" 2>/dev/null; then
   DEVICE_CHECKSUM="$(adb -s "${SERIAL}" shell "cat '${DEVICE_CHECKSUM_FILE}'" 2>/dev/null | tr -d '\r' | tr -d ' \n')"
 else
   DEVICE_CHECKSUM=""
 fi
 
-if [[ "${DEVICE_CHECKSUM}" != "${MODEL_CHECKSUM}" || ! -f "${DEVICE_MODEL_FILE}" ]]; then
+if [[ "${DEVICE_CHECKSUM}" != "${MODEL_CHECKSUM}" ]] || ! adb -s "${SERIAL}" shell "test -f '${DEVICE_MODEL_FILE}'" 2>/dev/null; then
   echo "[info] Pushing model to device..."
   adb -s "${SERIAL}" push "${MODEL}" "${DEVICE_MODEL_FILE}" >/dev/null
   echo -n "${MODEL_CHECKSUM}" | adb -s "${SERIAL}" shell "cat > '${DEVICE_CHECKSUM_FILE}'"
   echo "[info] Model checksum: ${MODEL_CHECKSUM}"
 else
   echo "[info] Device model matches (checksum verified), skipping push."
+fi
+
+MANIFEST=""
+MANIFEST_LINES=()
+
+if [[ -f "${INSTALL_DIR}/bin/llama-bench" ]]; then
+  checksum="$(sha256sum "${INSTALL_DIR}/bin/llama-bench" | awk '{print $1}')"
+  MANIFEST_LINES+=("${checksum}  bin/llama-bench")
+fi
+
+LIB_FILES=()
+if [[ -d "${INSTALL_DIR}/lib" ]]; then
+  for lib in "${INSTALL_DIR}"/lib/*.so; do
+    if [[ -f "${lib}" ]]; then
+      LIB_FILES+=("${lib}")
+    fi
+  done
+fi
+
+if [[ ${#LIB_FILES[@]} -gt 0 ]]; then
+  IFS=$'\n' sorted_libs=($(sort <<<"${LIB_FILES[*]}")); unset IFS
+  for lib in "${sorted_libs[@]}"; do
+    checksum="$(sha256sum "${lib}" | awk '{print $1}')"
+    lib_relative="lib/$(basename "${lib}")"
+    MANIFEST_LINES+=("${checksum}  ${lib_relative}")
+  done
+fi
+
+if [[ ${#MANIFEST_LINES[@]} -gt 0 ]]; then
+  IFS=$'\n' MANIFEST="$(printf '%s\n' "${MANIFEST_LINES[@]}")"
+  INSTALL_CHECKSUM="$(printf '%s' "${MANIFEST}" | sha256sum | awk '{print $1}')"
+else
+  INSTALL_CHECKSUM=""
+fi
+
+DEVICE_INSTALL_DIR="${TARGET_DIR}/install"
+DEVICE_INSTALL_CHECKSUM_FILE="${TARGET_DIR}/install.sha256"
+
+INSTALL_NEEDED=0
+if ! adb -s "${SERIAL}" shell "test -f '${DEVICE_INSTALL_CHECKSUM_FILE}'" 2>/dev/null; then
+  INSTALL_NEEDED=1
+else
+  DEVICE_INSTALL_CHECKSUM="$(adb -s "${SERIAL}" shell "cat '${DEVICE_INSTALL_CHECKSUM_FILE}'" 2>/dev/null | tr -d '\r' | tr -d ' \n')"
+  if [[ "${DEVICE_INSTALL_CHECKSUM}" != "${INSTALL_CHECKSUM}" ]]; then
+    INSTALL_NEEDED=1
+  fi
+fi
+
+if ! adb -s "${SERIAL}" shell "test -f '${DEVICE_INSTALL_DIR}/bin/llama-bench' && test -d '${DEVICE_INSTALL_DIR}/lib'" 2>/dev/null; then
+  INSTALL_NEEDED=1
+fi
+
+if [[ "${INSTALL_NEEDED}" -eq 1 ]]; then
+  echo "[info] Install artifact missing or checksum mismatch, pushing..."
+  adb -s "${SERIAL}" shell "rm -rf '${DEVICE_INSTALL_DIR}' && mkdir -p '${DEVICE_INSTALL_DIR}'"
+  adb -s "${SERIAL}" push "${INSTALL_DIR}/." "${DEVICE_INSTALL_DIR}/" >/dev/null
+  echo -n "${INSTALL_CHECKSUM}" | adb -s "${SERIAL}" shell "cat > '${DEVICE_INSTALL_CHECKSUM_FILE}'"
+  echo "[info] Install checksum: ${INSTALL_CHECKSUM}"
+else
+  echo "[info] Install artifact matches (checksum verified), skipping push."
 fi
 
 resolve_cpu_mask() {
@@ -235,9 +303,15 @@ DEVICE_MODEL_PATH="${TARGET_DIR}/model.gguf"
 
 echo "[info] Running llama-bench..."
 
+PROFILE_ENV=""
+if [[ "${ENABLE_PROFILE}" -eq 1 ]]; then
+  PROFILE_ENV="GGML_PROFILER=1"
+  echo "[info] Profiling enabled, stderr log: ${RUN_DIR}/llama_bench_stderr.log"
+fi
+
 adb -s "${SERIAL}" shell \
-  "cd '${TARGET_DIR}/install' && \
-   LD_LIBRARY_PATH=lib ${LLAMA_BENCH} \
+  "cd '${DEVICE_INSTALL_DIR}' && \
+   ${PROFILE_ENV} LD_LIBRARY_PATH=lib ${LLAMA_BENCH} \
      -m '${DEVICE_MODEL_PATH}' \
      -o json \
      -r ${RUNS} \
@@ -247,7 +321,8 @@ adb -s "${SERIAL}" shell \
      -p ${CTX} \
      -ngl 0 \
      -pg 0,${MAX_NEW_TOKENS}" \
-  > "${RUN_DIR}/llama_bench_output.json" 2>&1
+  > "${RUN_DIR}/llama_bench_output.json" \
+  2> "${RUN_DIR}/llama_bench_stderr.log"
 
 LLAMA_CPP_COMMIT="$(git -C "${REPO_ROOT}/native/third_party/llama.cpp" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
 

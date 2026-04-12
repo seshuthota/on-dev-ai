@@ -81,3 +81,22 @@ python3 scripts/benchmarks/compare_jsonl.py files/benchmarks/llama_cpp_android.j
 # Specific model
 python3 scripts/benchmarks/compare_jsonl.py files/benchmarks/llama_cpp_android.jsonl --model-id Qwen3.5-4B-Q4_K_M --status ok --latest-only
 ```
+
+## Profiler A/B Findings
+
+**Device:** iQOO 13 (Snapdragon 8 Elite, arm64-v8a)
+**Build:** profiler patch from `ondevai-profiler.patch`, compile with `-DGGML_PROFILER`
+
+### Throughput Impact
+
+| Build Variant | Decode (tok/s) | Notes |
+|---------------|----------------|-------|
+| clean llama-bench tg128 | ~42-44 | Baseline |
+| profiler compiled, runtime off | ~32 | After reuse |
+| profiler runtime on | ~27 | Active instrumentation overhead |
+
+**Conclusion:** Profiler builds are for hotspot direction only, not production perf numbers.
+
+### Hotspot Direction
+
+With profiler runtime enabled on Qwen2.5 1.5B Q4_K_M, MUL_MAT dominates decode at **~78-80%** of op time. Fixed op labels show the dominant path is `mul_mat`. Type splits now use upstream `ggml_type_name()` and should be trusted only after applying the profiler patch and rerunning profiling.

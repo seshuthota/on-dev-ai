@@ -24,6 +24,13 @@ set(GGML_CPU_KLEIDIAI OFF CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 set(GGML_CPU_ARM_ARCH "armv8.5-a+fp16+i8mm+dotprod" CACHE STRING "" FORCE)
+# GGML_PROFILER: compile-time flag to enable per-op profiling in ggml-cpu.c
+# Runtime also requires GGML_PROFILER=1 env var
+# Note: no FORCE so -DGGML_PROFILER=ON from gradle takes precedence
+set(GGML_PROFILER OFF CACHE BOOL "")
+if(GGML_PROFILER)
+    add_compile_definitions(GGML_PROFILER)
+endif()
 set(GGML_OPENCL ON CACHE BOOL "" FORCE)
 set(GGML_OPENCL_EMBED_KERNELS ON CACHE BOOL "" FORCE)
 set(GGML_OPENCL_USE_ADRENO_KERNELS OFF CACHE BOOL "" FORCE)

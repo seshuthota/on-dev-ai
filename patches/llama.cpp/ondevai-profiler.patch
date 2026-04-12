@@ -1,0 +1,423 @@
+diff --git a/ggml/include/ggml-cpu.h b/ggml/include/ggml-cpu.h
+index e3e067c91..afa1e0d8d 100644
+--- a/ggml/include/ggml-cpu.h
++++ b/ggml/include/ggml-cpu.h
+@@ -146,6 +146,14 @@ extern "C" {
+     GGML_BACKEND_API void ggml_cpu_fp32_to_bf16(const float *, ggml_bf16_t *, int64_t);
+     GGML_BACKEND_API void ggml_cpu_bf16_to_fp32(const ggml_bf16_t *, float *, int64_t);
+ 
++    //
++    // GGML_PROFILER: compile with -DGGML_PROFILER and set GGML_PROFILER=1 env var at runtime
++    // All timings are worker-time (sum of thread contributions), not wall-clock time.
++    //
++    GGML_BACKEND_API void ggml_cpu_profiler_print(int report_usecs); // 1=usec, 0=msec
++    GGML_BACKEND_API void ggml_cpu_profiler_reset(void);
++    GGML_BACKEND_API void ggml_cpu_profiler_enable(void);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
+index 2b3eb5b5c..780c8c285 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -78,6 +78,195 @@ float ggml_table_f32_f16[1 << 16];
+ // precomputed f32 table for e8m0 half (1 KB) (simd-mappings.h)
+ float ggml_table_f32_e8m0_half[1 << 8];
+ 
++//
++// GGML_PROFILER: per-op performance counter aggregation
++// Enabled by GGML_PROFILER=1 compile flag + GGML_PROFILER=1 env var at runtime
++// All timings are worker-time (sum of all thread contributions), not wall-time.
++//
++#ifdef GGML_PROFILER
++
++#include <string.h>
++#include <pthread.h>
++
++// Number of GGML op types we track
++#define GGML_PROFILER_N_OPS GGML_OP_COUNT
++
++// Max number of type-split sub-buckets per op (e.g. mul_mat_q4_K, mul_mat_f16, ...)
++#define GGML_PROFILER_MAX_TYPES 16
++
++struct ggml_profiler_bucket {
++    int64_t n_calls;
++    int64_t total_us;
++};
++
++struct ggml_profiler_op {
++    struct ggml_profiler_bucket total;
++    // Type-split sub-buckets: keyed by src0 type (int to allow -1 sentinel)
++    // For MUL_MAT: encodes src0_type*100 + src1_type to track both weight and activation types
++    struct {
++        int type;
++        int src0_type;  // weight type, or -1 if not used
++        int src1_type;  // activation type, or -1 if not used
++        struct ggml_profiler_bucket bucket;
++    } split[GGML_PROFILER_MAX_TYPES];
++    int n_split;
++};
++
++static struct ggml_profiler_op ggml_profiler_ops[GGML_PROFILER_N_OPS];
++static pthread_mutex_t ggml_profiler_mutex = PTHREAD_MUTEX_INITIALIZER;
++static int ggml_profiler_enabled = 0;
++static int ggml_profiler_initialized = 0;
++
++// Must be called before first use
++static void ggml_profiler_init(void) {
++    if (ggml_profiler_initialized) {
++        return;
++    }
++    ggml_profiler_initialized = 1;
++    ggml_profiler_enabled = getenv("GGML_PROFILER") != NULL && strcmp(getenv("GGML_PROFILER"), "1") == 0;
++}
++
++// Returns true if runtime profiling is enabled (compile with -DGGML_PROFILER + GGML_PROFILER=1 env var)
++static bool ggml_profiler_is_enabled(void) {
++    if (!ggml_profiler_initialized) ggml_profiler_init();
++    return ggml_profiler_enabled;
++}
++
++// Returns the sub-bucket index for a given type, or -1 if not found / table full
++// t < 0 means "no type" (skip type splitting)
++// For MUL_MAT: t encodes src0_type*100 + src1_type to track weight x activation types
++static int ggml_profiler_find_split(struct ggml_profiler_op * op, int t) {
++    for (int i = 0; i < op->n_split; i++) {
++        if (op->split[i].type == t) return i;
++    }
++    return -1;
++}
++
++// Get or create a sub-bucket for a type
++// t < 0 means "no type" (returns NULL to skip type splitting)
++// For MUL_MAT: pass src0_type*100+src1_type as t, and separately pass src0/src1 for display
++static struct ggml_profiler_bucket * ggml_profiler_get_split(struct ggml_profiler_op * op, int t, int src0_type, int src1_type) {
++    if (t < 0) return NULL;
++    int idx = ggml_profiler_find_split(op, t);
++    if (idx >= 0) return &op->split[idx].bucket;
++    if (op->n_split >= GGML_PROFILER_MAX_TYPES) return NULL;
++    idx = op->n_split++;
++    op->split[idx].type = t;
++    op->split[idx].src0_type = src0_type;
++    op->split[idx].src1_type = src1_type;
++    return &op->split[idx].bucket;
++}
++
++static const char * ggml_profiler_type_name(int t) {
++    if (t < 0 || t >= GGML_TYPE_COUNT) {
++        return "unknown";
++    }
++    return ggml_type_name((enum ggml_type)t);
++}
++
++// Format a type pair into a static buffer for display
++// For MUL_MAT: shows "q4_Kxf16" (weight x activation)
++// For other ops: shows single type name
++static char ggml_profiler_type_buf[64];
++static const char * ggml_profiler_type_pair_name(int src0_type, int src1_type) {
++    if (src0_type < 0) return "none";
++    if (src1_type < 0) return ggml_profiler_type_name(src0_type);
++    snprintf(ggml_profiler_type_buf, sizeof(ggml_profiler_type_buf), "%sx%s",
++             ggml_profiler_type_name(src0_type), ggml_profiler_type_name(src1_type));
++    return ggml_profiler_type_buf;
++}
++
++static void ggml_profiler_add(int op_type, int src0_type, int src1_type, int64_t us) {
++    if (!ggml_profiler_enabled) return;
++    if (op_type < 0 || op_type >= GGML_PROFILER_N_OPS) return;
++    pthread_mutex_lock(&ggml_profiler_mutex);
++    struct ggml_profiler_op * op = &ggml_profiler_ops[op_type];
++    op->total.n_calls++;
++    op->total.total_us += us;
++    // For MUL_MAT: encode weightxactivation as src0*100+src1 for separate tracking
++    int key = src0_type;
++    if (op_type == GGML_OP_MUL_MAT && src0_type >= 0 && src1_type >= 0) {
++        key = src0_type * 100 + src1_type;
++    }
++    struct ggml_profiler_bucket * b = ggml_profiler_get_split(op, key, src0_type, src1_type);
++    if (b) {
++        b->n_calls++;
++        b->total_us += us;
++    }
++    pthread_mutex_unlock(&ggml_profiler_mutex);
++}
++
++// Print compact summary (call after a decode or full benchmark pass)
++// Set report_usecs = true for microseconds, false for milliseconds
++void ggml_cpu_profiler_print(int report_usecs) {
++    if (!ggml_profiler_initialized) ggml_profiler_init();
++    if (!ggml_profiler_enabled) return;
++
++    pthread_mutex_lock(&ggml_profiler_mutex);
++    int64_t total_us = 0;
++    for (int i = 0; i < GGML_PROFILER_N_OPS; i++) {
++        total_us += ggml_profiler_ops[i].total.total_us;
++    }
++    if (total_us == 0) {
++        pthread_mutex_unlock(&ggml_profiler_mutex);
++        return;
++    }
++
++    double div = report_usecs ? 1.0 : 1000.0;
++    const char * unit = report_usecs ? "us" : "ms";
++
++    fprintf(stderr, "\n=== ggml profiler (worker-time, %s) ===\n", unit);
++    fprintf(stderr, "%-24s %9s %10s %9s %6s\n",
++            "op", "calls", "total", "avg", "pct");
++    fprintf(stderr, "%-24s %9s %10s %9s %6s\n",
++            "---", "-----", "-----", "---", "---");
++
++    for (int i = 0; i < GGML_PROFILER_N_OPS; i++) {
++        struct ggml_profiler_op * op = &ggml_profiler_ops[i];
++        int64_t t = op->total.total_us;
++        int64_t n = op->total.n_calls;
++        if (n == 0) continue;
++
++        int64_t avg = t / n;
++        double pct = 100.0 * (double)t / (double)total_us;
++        fprintf(stderr, "%-24s %9" PRId64 " %10.1f %9.0f %5.1f%%\n",
++                ggml_op_name((enum ggml_op) i), n, t / div, avg / div, pct);
++
++        // Print type splits if present
++        for (int s = 0; s < op->n_split; s++) {
++            int64_t ts = op->split[s].bucket.total_us;
++            int64_t ns = op->split[s].bucket.n_calls;
++            if (ns == 0) continue;
++            int64_t avgs = ts / ns;
++            double pcts = 100.0 * (double)ts / (double)total_us;
++            fprintf(stderr, "  %-22s %9" PRId64 " %10.1f %9.0f %5.1f%%\n",
++                    ggml_profiler_type_pair_name(op->split[s].src0_type, op->split[s].src1_type), ns, ts / div, avgs / div, pcts);
++        }
++    }
++    fprintf(stderr, "%-24s %9s %10.1f\n", "total", "", total_us / div);
++    fprintf(stderr, "NOTE: worker-time (sum of thread contributions), not wall-clock time.\n\n");
++    pthread_mutex_unlock(&ggml_profiler_mutex);
++}
++
++void ggml_cpu_profiler_reset(void) {
++    if (!ggml_profiler_initialized) ggml_profiler_init();
++    if (!ggml_profiler_enabled) return;
++    pthread_mutex_lock(&ggml_profiler_mutex);
++    memset(ggml_profiler_ops, 0, sizeof(ggml_profiler_ops));
++    pthread_mutex_unlock(&ggml_profiler_mutex);
++}
++
++void ggml_cpu_profiler_enable(void) {
++    if (!ggml_profiler_initialized) ggml_profiler_init();
++    ggml_profiler_enabled = 1;
++}
++
++#else
++void ggml_cpu_profiler_print(int usecs) { (void)usecs; }
++void ggml_cpu_profiler_reset(void) {}
++void ggml_cpu_profiler_enable(void) {}
++#endif
++
+ #if defined(__ARM_ARCH)
+ struct ggml_arm_arch_features_type {
+     int sve_cnt;
+@@ -1405,6 +1594,9 @@ UseGgmlGemm2:;
+     int current_chunk = ith;
+ 
+     while (current_chunk < nchunk0 * nchunk1) {
++#ifdef GGML_CPU_PERF
++        ggml_perf_op_end(GGML_PERF_OP_MUL_MAT);
++#endif
+         const int64_t ith0 = current_chunk % nchunk0;
+         const int64_t ith1 = current_chunk / nchunk0;
+ 
+@@ -1422,6 +1614,9 @@ UseGgmlGemm2:;
+         if ((nr0 % 2 != 0) || (ne11 % 2 != 0) || ((ir0_end - ir0_start) % 2 != 0) || ((ir1_end - ir1_start) % 2 != 0)) {
+             num_rows_per_vec_dot = 1;
+         }
++#ifdef GGML_CPU_PERF
++        ggml_perf_op_start(GGML_PERF_OP_MUL_MAT);
++#endif
+         ggml_compute_forward_mul_mat_one_chunk(params, dst, src0->type, num_rows_per_vec_dot, ir0_start, ir0_end, ir1_start, ir1_end);
+ 
+         if (nth >= nchunk0 * nchunk1) {
+@@ -1430,6 +1625,9 @@ UseGgmlGemm2:;
+ 
+         current_chunk = atomic_fetch_add_explicit(&params->threadpool->current_chunk, 1, memory_order_relaxed);
+     }
++#ifdef GGML_CPU_PERF
++    ggml_perf_op_end(GGML_PERF_OP_MUL_MAT);
++#endif
+ }
+ 
+ // ggml_compute_forward_mul_mat_id
+@@ -1704,11 +1902,33 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
+     switch (tensor->op) {
+         case GGML_OP_DUP:
+             {
++#ifdef GGML_PROFILER
++                int64_t t0 = 0;
++                if (ggml_profiler_is_enabled()) {
++                    t0 = ggml_time_us();
++                }
++#endif
+                 ggml_compute_forward_dup(params, tensor);
++#ifdef GGML_PROFILER
++                if (ggml_profiler_is_enabled()) {
++                    ggml_profiler_add(GGML_OP_DUP, tensor->src[0] ? (int)tensor->src[0]->type : -1, -1, ggml_time_us() - t0);
++                }
++#endif
+             } break;
+         case GGML_OP_ADD:
+             {
++#ifdef GGML_PROFILER
++                int64_t t0 = 0;
++                if (ggml_profiler_is_enabled()) {
++                    t0 = ggml_time_us();
++                }
++#endif
+                 ggml_compute_forward_add(params, tensor);
++#ifdef GGML_PROFILER
++                if (ggml_profiler_is_enabled()) {
++                    ggml_profiler_add(GGML_OP_ADD, tensor->src[0] ? (int)tensor->src[0]->type : -1, -1, ggml_time_us() - t0);
++                }
++#endif
+             } break;
+         case GGML_OP_ADD_ID:
+             {
+@@ -1800,7 +2020,18 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
+             } break;
+         case GGML_OP_RMS_NORM:
+             {
++#ifdef GGML_PROFILER
++                int64_t t0 = 0;
++                if (ggml_profiler_is_enabled()) {
++                    t0 = ggml_time_us();
++                }
++#endif
+                 ggml_compute_forward_rms_norm(params, tensor);
++#ifdef GGML_PROFILER
++                if (ggml_profiler_is_enabled()) {
++                    ggml_profiler_add(GGML_OP_RMS_NORM, tensor->src[0] ? (int)tensor->src[0]->type : -1, -1, ggml_time_us() - t0);
++                }
++#endif
+             } break;
+         case GGML_OP_RMS_NORM_BACK:
+             {
+@@ -1816,7 +2047,21 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
+             } break;
+         case GGML_OP_MUL_MAT:
+             {
++#ifdef GGML_PROFILER
++                int64_t t0 = 0;
++                if (ggml_profiler_is_enabled()) {
++                    t0 = ggml_time_us();
++                }
++#endif
+                 ggml_compute_forward_mul_mat(params, tensor);
++#ifdef GGML_PROFILER
++                if (ggml_profiler_is_enabled()) {
++                    ggml_profiler_add(GGML_OP_MUL_MAT,
++                        tensor->src[0] ? (int)tensor->src[0]->type : -1,
++                        tensor->src[1] ? (int)tensor->src[1]->type : -1,
++                        ggml_time_us() - t0);
++                }
++#endif
+             } break;
+         case GGML_OP_MUL_MAT_ID:
+             {
+@@ -1828,7 +2073,18 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
+             } break;
+         case GGML_OP_SCALE:
+             {
++#ifdef GGML_PROFILER
++                int64_t t0 = 0;
++                if (ggml_profiler_is_enabled()) {
++                    t0 = ggml_time_us();
++                }
++#endif
+                 ggml_compute_forward_scale(params, tensor);
++#ifdef GGML_PROFILER
++                if (ggml_profiler_is_enabled()) {
++                    ggml_profiler_add(GGML_OP_SCALE, tensor->src[0] ? (int)tensor->src[0]->type : -1, -1, ggml_time_us() - t0);
++                }
++#endif
+             } break;
+         case GGML_OP_SET:
+             {
+@@ -1868,7 +2124,18 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
+             } break;
+         case GGML_OP_SOFT_MAX:
+             {
++#ifdef GGML_PROFILER
++                int64_t t0 = 0;
++                if (ggml_profiler_is_enabled()) {
++                    t0 = ggml_time_us();
++                }
++#endif
+                 ggml_compute_forward_soft_max(params, tensor);
++#ifdef GGML_PROFILER
++                if (ggml_profiler_is_enabled()) {
++                    ggml_profiler_add(GGML_OP_SOFT_MAX, -1, -1, ggml_time_us() - t0);
++                }
++#endif
+             } break;
+         case GGML_OP_SOFT_MAX_BACK:
+             {
+@@ -1876,7 +2143,18 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
+             } break;
+         case GGML_OP_ROPE:
+             {
++#ifdef GGML_PROFILER
++                int64_t t0 = 0;
++                if (ggml_profiler_is_enabled()) {
++                    t0 = ggml_time_us();
++                }
++#endif
+                 ggml_compute_forward_rope(params, tensor);
++#ifdef GGML_PROFILER
++                if (ggml_profiler_is_enabled()) {
++                    ggml_profiler_add(GGML_OP_ROPE, tensor->src[0] ? (int)tensor->src[0]->type : -1, -1, ggml_time_us() - t0);
++                }
++#endif
+             } break;
+         case GGML_OP_ROPE_BACK:
+             {
+@@ -2007,7 +2285,18 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
+             } break;
+         case GGML_OP_GLU:
+             {
++#ifdef GGML_PROFILER
++                int64_t t0 = 0;
++                if (ggml_profiler_is_enabled()) {
++                    t0 = ggml_time_us();
++                }
++#endif
+                 ggml_compute_forward_glu(params, tensor);
++#ifdef GGML_PROFILER
++                if (ggml_profiler_is_enabled()) {
++                    ggml_profiler_add(GGML_OP_GLU, tensor->src[0] ? (int)tensor->src[0]->type : -1, -1, ggml_time_us() - t0);
++                }
++#endif
+             } break;
+         case GGML_OP_GET_REL_POS:
+             {
+diff --git a/tools/llama-bench/llama-bench.cpp b/tools/llama-bench/llama-bench.cpp
+index b15a26a98..c0fa8ef5a 100644
+--- a/tools/llama-bench/llama-bench.cpp
++++ b/tools/llama-bench/llama-bench.cpp
+@@ -22,6 +22,7 @@
+ #include "common.h"
+ #include "download.h"
+ #include "ggml.h"
++#include "ggml-cpu.h"
+ #include "llama.h"
+ 
+ #ifdef _WIN32
+@@ -2407,6 +2408,10 @@ int main(int argc, char ** argv) {
+         }
+ 
+         llama_perf_context_print(ctx);
++#ifdef GGML_PROFILER
++        ggml_cpu_profiler_print(1); // print in microseconds
++        ggml_cpu_profiler_reset();
++#endif
+ 
+         llama_free(ctx);
+ 

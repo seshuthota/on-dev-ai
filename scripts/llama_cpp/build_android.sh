@@ -7,6 +7,7 @@ LLAMA_CPP_DIR="${REPO_ROOT}/native/third_party/llama.cpp"
 
 BUILD_DIR="${REPO_ROOT}/.artifacts/llama-cpp/build-android"
 INSTALL_DIR="${REPO_ROOT}/.artifacts/llama-cpp/android-install"
+ENABLE_PROFILER=0
 
 usage() {
   cat <<'EOF'
@@ -17,6 +18,8 @@ Build llama.cpp for Android arm64-v8a using the Android NDK.
 Options:
   --build-dir PATH    Build directory (default: .artifacts/llama-cpp/build-android)
   --install-dir PATH  Install directory (default: .artifacts/llama-cpp/android-install)
+  --profiler          Enable GGML_PROFILER instrumentation (compile-time).
+                      Runtime also requires GGML_PROFILER=1 env var.
   -h, --help          Show this help message
 
 NDK Detection:
@@ -38,6 +41,10 @@ while [[ $# -gt 0 ]]; do
     --install-dir)
       INSTALL_DIR="$2"
       shift 2
+      ;;
+    --profiler)
+      ENABLE_PROFILER=1
+      shift
       ;;
     -h|--help)
       usage
@@ -96,15 +103,23 @@ fi
 echo "[info] NDK root: ${NDK_ROOT}"
 echo "[info] Build directory: ${BUILD_DIR}"
 echo "[info] Install directory: ${INSTALL_DIR}"
+echo "[info] Profiler compile: ${ENABLE_PROFILER}"
 
 mkdir -p "${BUILD_DIR}"
+
+PROFILER_C_FLAGS="-march=armv8.7a"
+PROFILER_CXX_FLAGS="-march=armv8.7a"
+if [[ "${ENABLE_PROFILER}" -eq 1 ]]; then
+  PROFILER_C_FLAGS+=" -DGGML_PROFILER"
+  PROFILER_CXX_FLAGS+=" -DGGML_PROFILER"
+fi
 
 cmake \
   -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
   -DANDROID_ABI=arm64-v8a \
   -DANDROID_PLATFORM=android-28 \
-  -DCMAKE_C_FLAGS="-march=armv8.7a" \
-  -DCMAKE_CXX_FLAGS="-march=armv8.7a" \
+  -DCMAKE_C_FLAGS="${PROFILER_C_FLAGS}" \
+  -DCMAKE_CXX_FLAGS="${PROFILER_CXX_FLAGS}" \
   -DGGML_OPENMP=OFF \
   -DGGML_LLAMAFILE=OFF \
   -DCMAKE_BUILD_TYPE=Release \

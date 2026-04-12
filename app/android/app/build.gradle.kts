@@ -37,6 +37,17 @@ val ondevaiEnableQnn = providers.gradleProperty("ondevai.enableQnn")
     .orElse(false)
     .get()
 
+val ondevaiEnableProfiler = providers.gradleProperty("ondevai.enableProfiler")
+    .map { value ->
+        when (value.trim().lowercase()) {
+            "1", "true", "yes", "on" -> true
+            "0", "false", "no", "off" -> false
+            else -> throw GradleException("Invalid ondevai.enableProfiler value '$value' (expected true/false)")
+        }
+    }
+    .orElse(false)
+    .get()
+
 val qnnRuntimeLibs = listOf(
     "libQnnSystem.so",
     "libQnnCpu.so",
@@ -233,10 +244,11 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags += "-std=c++20"
-                // Always build native code with full optimization — even in debug APKs.
-                // Without this, assembleDebug uses -O0 which makes inference ~10x slower.
                 arguments += "-DCMAKE_BUILD_TYPE=Release"
                 arguments += "-DONDEVAI_ENABLE_QNN=${if (ondevaiEnableQnn) "ON" else "OFF"}"
+                if (ondevaiEnableProfiler) {
+                    arguments += "-DGGML_PROFILER=ON"
+                }
                 if (ondevaiEnableQnn) {
                     arguments += "-DQAIRT_SDK_ROOT=${qairtSdkRoot.absolutePath}"
                 }
