@@ -1,290 +1,186 @@
 package ai.ondev.snapdragonlab.ui
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.Explore
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import ai.ondev.snapdragonlab.MainViewModel
+import androidx.navigation.navArgument
+import ai.ondev.snapdragonlab.AppContainer
+import ai.ondev.snapdragonlab.ui.browser.ModelBrowserScreen
+import ai.ondev.snapdragonlab.ui.browser.ModelBrowserViewModel
+import ai.ondev.snapdragonlab.ui.chat.ChatScreen
+import ai.ondev.snapdragonlab.ui.chat.ChatViewModel
+import ai.ondev.snapdragonlab.ui.conversations.ConversationsScreen
+import ai.ondev.snapdragonlab.ui.conversations.ConversationsViewModel
+import ai.ondev.snapdragonlab.ui.developer.DeveloperScreen
+import ai.ondev.snapdragonlab.ui.developer.DeveloperViewModel
+import ai.ondev.snapdragonlab.ui.settings.SettingsScreen
+import ai.ondev.snapdragonlab.ui.settings.SettingsViewModel
 
-private enum class AppDestination(val route: String, val label: String) {
-    Chat("chat", "Chat"),
-    Settings("settings", "Settings"),
-    Developer("developer", "Developer"),
+private enum class TopDestination(
+    val route: String,
+    val label: String,
+    val selectedIcon: ImageVector,
+    val unselectedIcon: ImageVector,
+) {
+    Conversations("conversations", "Chats", Icons.Filled.ChatBubble, Icons.Outlined.ChatBubbleOutline),
+    Browser("browser", "Models", Icons.Filled.Explore, Icons.Outlined.Explore),
+    Settings("settings", "Settings", Icons.Filled.Settings, Icons.Outlined.Settings),
+    Developer("developer", "Dev", Icons.Filled.Code, Icons.Outlined.Code),
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SnapdragonLabApp(viewModel: MainViewModel) {
+fun SnapdragonLabApp(
+    container: AppContainer,
+    benchmarkHistoryPath: String,
+) {
     val navController = rememberNavController()
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val backStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = backStackEntry?.destination?.route ?: AppDestination.Chat.route
+    val currentRoute = backStackEntry?.destination?.route
+
+    // Determine if we're on a top-level vs nested screen
+    val isTopLevel = TopDestination.entries.any { it.route == currentRoute }
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("Snapdragon Lab") })
+            if (isTopLevel) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = "OnDevAI",
+                            style = MaterialTheme.typography.titleLarge,
+                        )
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                    ),
+                )
+            }
         },
         bottomBar = {
-            NavigationBar {
-                AppDestination.entries.forEach { destination ->
-                    NavigationBarItem(
-                        selected = currentRoute == destination.route,
-                        onClick = {
-                            navController.navigate(destination.route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
+            if (isTopLevel) {
+                NavigationBar {
+                    TopDestination.entries.forEach { destination ->
+                        val selected = currentRoute == destination.route
+                        NavigationBarItem(
+                            selected = selected,
+                            onClick = {
+                                navController.navigate(destination.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
                                 }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        },
-                        icon = {},
-                        label = { Text(destination.label) },
-                    )
+                            },
+                            icon = {
+                                Icon(
+                                    imageVector = if (selected) destination.selectedIcon else destination.unselectedIcon,
+                                    contentDescription = destination.label,
+                                )
+                            },
+                            label = { Text(destination.label) },
+                        )
+                    }
                 }
             }
         },
     ) { padding ->
         NavHost(
             navController = navController,
-            startDestination = AppDestination.Chat.route,
+            startDestination = TopDestination.Conversations.route,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            composable(AppDestination.Chat.route) {
-                ScreenColumn {
-                    InfoCard(
-                        title = "Native runtime",
-                        body = uiState.nativeStatus,
-                    )
-                    InfoCard(
-                        title = "Active backend target",
-                        body = uiState.backendLabel,
-                    )
-                    InfoCard(
-                        title = "Loaded backend",
-                        body = uiState.loadedBackendLabel,
-                    )
-                    InfoCard(
-                        title = "Model path",
-                        body = uiState.modelPath,
-                    )
-                    InfoCard(
-                        title = "Path diagnostics",
-                        body = uiState.pathDiagnostics,
-                    )
-                    InfoCard(
-                        title = "Model load status",
-                        body = uiState.loadStatus,
-                    )
-                    OutlinedTextField(
-                        value = uiState.prompt,
-                        onValueChange = viewModel::updatePrompt,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Prompt") },
-                    )
-                    Button(
-                        onClick = viewModel::loadModel,
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !uiState.isBusy,
-                    ) {
-                        Text("Load hardcoded model")
-                    }
-                    Button(
-                        onClick = viewModel::generate,
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = uiState.isModelLoaded && !uiState.isBusy,
-                    ) {
-                        Text("Generate on selected backend")
-                    }
-                    Button(
-                        onClick = viewModel::stopGeneration,
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = uiState.isBusy,
-                    ) {
-                        Text("Stop generation")
-                    }
-                    InfoCard(
-                        title = "Model target",
-                        body = uiState.modelLabel,
-                    )
-                    InfoCard(
-                        title = "Generation status",
-                        body = uiState.generationSummary,
-                    )
-                    InfoCard(
-                        title = "Output",
-                        body = uiState.output,
-                    )
-                }
+            composable(TopDestination.Conversations.route) {
+                val vm: ConversationsViewModel = viewModel(
+                    factory = ConversationsViewModel.Factory(container.chatRepository),
+                )
+                ConversationsScreen(
+                    viewModel = vm,
+                    onNavigateToChat = { conversationId ->
+                        navController.navigate("chat/$conversationId")
+                    },
+                )
             }
 
-            composable(AppDestination.Settings.route) {
-                val isOpenClAvailable = uiState.runtimeInfo.contains("OpenCL")
-                val isVulkanAvailable = uiState.runtimeInfo.contains("Vulkan")
-                val isQnnBuildEnabled = uiState.isQnnBuildEnabled
-                val isQnnPackaged = uiState.runtimeInfo.contains("qnn_status=runtime_packaged")
-                ScreenColumn {
-                    InfoCard(
-                        title = "Backend target",
-                        body = uiState.backendLabel,
-                    )
-                    Button(
-                        onClick = { viewModel.selectBackendTarget("cpu") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !uiState.isBusy,
-                    ) {
-                        Text("Use CPU")
-                    }
-                    Button(
-                        onClick = { viewModel.selectBackendTarget("opencl") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !uiState.isBusy && isOpenClAvailable,
-                    ) {
-                        Text(if (isOpenClAvailable) "Use OpenCL" else "Use OpenCL (unavailable)")
-                    }
-                    Button(
-                        onClick = { viewModel.selectBackendTarget("vulkan") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !uiState.isBusy && isVulkanAvailable,
-                    ) {
-                        Text(if (isVulkanAvailable) "Use Vulkan" else "Use Vulkan (unavailable)")
-                    }
-                    Button(
-                        onClick = { viewModel.selectBackendTarget("qnn") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !uiState.isBusy && isQnnBuildEnabled,
-                    ) {
-                        Text(
-                            when {
-                                !isQnnBuildEnabled -> "Use QNN (disabled at build)"
-                                isQnnPackaged -> "Use QNN (experimental)"
-                                else -> "Use QNN (runtime incomplete)"
-                            },
-                        )
-                    }
-                    InfoCard(
-                        title = "Reload state",
-                        body = uiState.loadedBackendLabel,
-                    )
-                    InfoCard(
-                        title = "Backend status",
-                        body = buildString {
-                            append("OpenCL: ")
-                            append(if (isOpenClAvailable) "available" else "unavailable or not compiled")
-                            append("\n")
-                            append("Vulkan: ")
-                            append(if (isVulkanAvailable) "available" else "unavailable or not compiled")
-                            append("\n")
-                            append("QNN: ")
-                            append(
-                                when {
-                                    !isQnnBuildEnabled -> "disabled at build"
-                                    isQnnPackaged -> "packaged, experimental load path"
-                                    else -> "enabled at build but runtime packaging incomplete"
-                                },
-                            )
-                        },
-                    )
-                }
+            composable(
+                route = "chat/{conversationId}",
+                arguments = listOf(navArgument("conversationId") { type = NavType.StringType }),
+            ) { backStack ->
+                val conversationId = backStack.arguments?.getString("conversationId") ?: return@composable
+                val vm: ChatViewModel = viewModel(
+                    key = conversationId,
+                    factory = ChatViewModel.Factory(
+                        conversationId = conversationId,
+                        chatRepository = container.chatRepository,
+                        modelRepository = container.modelRepository,
+                        inferenceRepository = container.inferenceRepository,
+                        settingsRepository = container.settingsRepository,
+                    ),
+                )
+                ChatScreen(
+                    viewModel = vm,
+                    onNavigateBack = { navController.popBackStack() },
+                )
             }
 
-            composable(AppDestination.Developer.route) {
-                ScreenColumn {
-                    InfoCard(
-                        title = "Benchmark harness",
-                        body = uiState.benchmarkStatus,
-                    )
-                    Button(
-                        onClick = { viewModel.runBenchmark("smoke") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = uiState.isModelLoaded && !uiState.isBusy,
-                    ) {
-                        Text("Run smoke benchmark")
-                    }
-                    Button(
-                        onClick = { viewModel.runBenchmark("standard") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = uiState.isModelLoaded && !uiState.isBusy,
-                    ) {
-                        Text("Run standard benchmark")
-                    }
-                    InfoCard(
-                        title = "Latest benchmark",
-                        body = uiState.latestBenchmark,
-                    )
-                    InfoCard(
-                        title = "Benchmark history",
-                        body = uiState.benchmarkHistory,
-                    )
-                    InfoCard(
-                        title = "Runtime info",
-                        body = uiState.runtimeInfo,
-                    )
-                }
+            composable(TopDestination.Browser.route) {
+                val vm: ModelBrowserViewModel = viewModel(
+                    factory = ModelBrowserViewModel.Factory(
+                        hfApi = container.hfApi,
+                        downloadRepository = container.downloadRepository,
+                        modelRepository = container.modelRepository,
+                    ),
+                )
+                ModelBrowserScreen(viewModel = vm)
             }
-        }
-    }
-}
 
-@Composable
-private fun ScreenColumn(content: @Composable () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        content = { content() },
-    )
-}
+            composable(TopDestination.Settings.route) {
+                val vm: SettingsViewModel = viewModel(
+                    factory = SettingsViewModel.Factory(
+                        inferenceRepository = container.inferenceRepository,
+                        settingsRepository = container.settingsRepository,
+                    ),
+                )
+                SettingsScreen(viewModel = vm)
+            }
 
-@Composable
-private fun InfoCard(
-    title: String,
-    body: String,
-    modifier: Modifier = Modifier,
-) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Column(
-            modifier = Modifier.padding(PaddingValues(16.dp)),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = body,
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            composable(TopDestination.Developer.route) {
+                val vm: DeveloperViewModel = viewModel(
+                    factory = DeveloperViewModel.Factory(benchmarkHistoryPath),
+                )
+                DeveloperScreen(viewModel = vm)
+            }
         }
     }
 }
