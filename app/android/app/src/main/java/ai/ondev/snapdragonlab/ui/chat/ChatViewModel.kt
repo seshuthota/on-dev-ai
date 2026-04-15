@@ -126,8 +126,15 @@ class ChatViewModel(
                 allMessages.add(persistedUserMessage)
             }
             
-            val modelFamily = PromptTemplates.detectModelFamily(model.filename)
+            val modelIdentity = "${model.hfRepoId}/${model.filename}"
+            val modelFamily = PromptTemplates.detectModelFamily(modelIdentity)
             val prompt = PromptTemplates.buildPrompt(allMessages, modelFamily)
+            val stopMarkers = listOf(
+                "<|start_header_id|>user<|end_header_id|>",
+                "<|im_start|>user",
+                "<start_of_turn>user",
+            )
+            var stopRequested = false
 
             // 5. Generate
             _uiState.value = _uiState.value.copy(
@@ -140,13 +147,29 @@ class ChatViewModel(
                 prompt = prompt,
                 maxTokens = 512,
                 onToken = { token ->
-                    _uiState.value = _uiState.value.copy(
-                        draftAssistantContent = _uiState.value.draftAssistantContent + token,
-                    )
+                    val next = _uiState.value.draftAssistantContent + token
+                    val markerIndex = stopMarkers
+                        .map { marker -> next.indexOf(marker) }
+                        .filter { it >= 0 }
+                        .minOrNull()
+
+                    if (markerIndex != null) {
+                        _uiState.value = _uiState.value.copy(
+                            draftAssistantContent = next.substring(0, markerIndex).trimEnd(),
+                        )
+                        if (!stopRequested) {
+                            stopRequested = true
+                            inferenceRepository.stopGeneration()
+                        }
+                    } else {
+                        _uiState.value = _uiState.value.copy(
+                            draftAssistantContent = next,
+                        )
+                    }
                 },
                 onComplete = { summary ->
                     viewModelScope.launch {
-                        val finalContent = _uiState.value.draftAssistantContent
+                        val finalContent = sanitizeAssistantOutput(_uiState.value.draftAssistantContent)
                         if (finalContent.isNotBlank()) {
                             chatRepository.addMessage(
                                 conversationId,
@@ -162,7 +185,7 @@ class ChatViewModel(
                 },
                 onError = { errorMsg ->
                     viewModelScope.launch {
-                        val partial = _uiState.value.draftAssistantContent
+                        val partial = sanitizeAssistantOutput(_uiState.value.draftAssistantContent)
                         if (partial.isNotBlank()) {
                             chatRepository.addMessage(
                                 conversationId,
@@ -203,6 +226,20 @@ class ChatViewModel(
 
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
+    }
+
+    private fun sanitizeAssistantOutput(text: String): String {
+        val markers = listOf(
+            "<|start_header_id|>user<|end_header_id|>",
+            "<|im_start|>user",
+            "<start_of_turn>user",
+        )
+        val cutAt = markers
+            .map { marker -> text.indexOf(marker) }
+            .filter { it >= 0 }
+            .minOrNull()
+            ?: -1
+        return if (cutAt >= 0) text.substring(0, cutAt).trimEnd() else text.trimEnd()
     }
 
     class Factory(

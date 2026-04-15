@@ -18,6 +18,16 @@ class ModelRepository(private val modelDao: ModelDao) {
     suspend fun getModelById(id: String): ModelSummary? =
         modelDao.getById(id)?.toDomain()
 
+    suspend fun refreshModelSizeFromFile(id: String) {
+        val entity = modelDao.getById(id) ?: return
+        entity.localPath?.let { path ->
+            val file = java.io.File(path)
+            if (file.exists()) {
+                modelDao.update(entity.copy(sizeBytes = file.length(), updatedAt = System.currentTimeMillis()))
+            }
+        }
+    }
+
     suspend fun insertModel(model: ModelSummary) {
         modelDao.insert(model.toEntity())
     }

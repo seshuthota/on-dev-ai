@@ -190,12 +190,13 @@ class ModelBrowserViewModel(
                 current[modelId] = state
                 _uiState.value = _uiState.value.copy(downloadStates = current)
 
-                // Sync completed state back to Room
+                // Sync completed state back to Room and refresh file size
                 if (state is DownloadState.Completed) {
                     modelRepository.updateModelStatus(
                         modelId,
                         ai.ondev.snapdragonlab.domain.model.ModelStatus.READY,
                     )
+                    modelRepository.refreshModelSizeFromFile(modelId)
                 } else if (state is DownloadState.Failed) {
                     modelRepository.updateModelStatus(
                         modelId,

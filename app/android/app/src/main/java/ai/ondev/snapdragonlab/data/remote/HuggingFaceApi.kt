@@ -52,7 +52,7 @@ class HuggingFaceApi(
      * Siblings list contains all files in the repo.
      */
     suspend fun getRepoDetail(repoId: String): Result<HfRepoDetail> = withContext(Dispatchers.IO) {
-        val url = "$BASE_URL/api/models/$repoId"
+        val url = "$BASE_URL/api/models/$repoId?blobs=true"
         executeRequest(url) { body ->
             json.decodeFromString<HfRepoDetail>(body)
         }
