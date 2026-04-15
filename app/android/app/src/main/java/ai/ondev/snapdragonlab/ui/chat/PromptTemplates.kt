@@ -9,6 +9,7 @@ object PromptTemplates {
         when (modelFamily) {
             ModelFamily.LLAMA -> buildLlamaPrompt(messages)
             ModelFamily.QWEN -> buildQwenPrompt(messages)
+            ModelFamily.GEMMA -> buildGemmaPrompt(messages)
             ModelFamily.DEFAULT -> buildChatMlPrompt(messages)
         }
 
@@ -17,6 +18,7 @@ object PromptTemplates {
         return when {
             "llama" in lower || "meta" in lower -> ModelFamily.LLAMA
             "qwen" in lower -> ModelFamily.QWEN
+            "gemma" in lower -> ModelFamily.GEMMA
             else -> ModelFamily.DEFAULT
         }
     }
@@ -70,9 +72,59 @@ object PromptTemplates {
         append("<|im_start|>assistant\n")
     }
 
+    private fun buildGemmaPrompt(messages: List<ChatMessage>): String = buildString {
+        append("<bos>")
+        var pendingSystem = mutableListOf<String>()
+        var firstUserSeen = false
+
+        for (message in messages) {
+            when (message.role) {
+                MessageRole.SYSTEM -> {
+                    if (message.content.isNotBlank()) {
+                        pendingSystem.add(message.content.trim())
+                    }
+                }
+                MessageRole.USER -> {
+                    firstUserSeen = true
+                    if (pendingSystem.isNotEmpty()) {
+                        append("<start_of_turn>user\n")
+                        append("System instruction:\n")
+                        append(pendingSystem.joinToString("\n\n"))
+                        append("\n\n")
+                        append(message.content)
+                        append("<end_of_turn>\n")
+                        pendingSystem.clear()
+                    } else {
+                        append("<start_of_turn>user\n")
+                        append(message.content)
+                        append("<end_of_turn>\n")
+                    }
+                }
+                MessageRole.ASSISTANT -> {
+                    append("<start_of_turn>model\n")
+                    append(message.content)
+                    append("<end_of_turn>\n")
+                }
+            }
+        }
+
+        // If system instruction exists without a following user turn, emit it now.
+        // But for Gemma, system instructions should precede user turns, so this case
+        // only occurs if the conversation ends without a user turn after system msg.
+        if (pendingSystem.isNotEmpty() && !firstUserSeen) {
+            append("<start_of_turn>user\n")
+            append("System instruction:\n")
+            append(pendingSystem.joinToString("\n\n"))
+            append("<end_of_turn>\n")
+        }
+
+        append("<start_of_turn>model\n")
+    }
+
     enum class ModelFamily {
         LLAMA,
         QWEN,
+        GEMMA,
         DEFAULT,
     }
 }
